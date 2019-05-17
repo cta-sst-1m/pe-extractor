@@ -18,7 +18,7 @@ def n_photon_from_rate(photon_rate_mhz, n_bin=800, bin_size_ns=0.5):
 
 
 def prepare_pulse_template(
-        template_path='pulse_template.txt', amplitude_gain=5., bin_size_ns=0.5,
+        template_path='pulse_templates/SST-1M_01.txt', amplitude_gain=5., bin_size_ns=0.5,
         sampling_rate_mhz=250
 ):
     """
@@ -172,7 +172,7 @@ def generator_for_training(
     second is along time (bin or sample).
     """
     template_amplitude_bin = prepare_pulse_template(
-        template_path='pulse_template.txt', amplitude_gain=amplitude_gain,
+        template_path='pulse_templates/SST-1M_01.txt', amplitude_gain=amplitude_gain,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz
     )
     sample_size_ns = 1000 / sampling_rate_mhz
