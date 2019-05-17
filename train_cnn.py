@@ -30,14 +30,14 @@ def loss_chi2(y_true, y_pred):
 def timebin_from_prediction(y_pred):
     if y_pred.ndim == 1:
         y_pred = y_pred.reshape([1, -1])
-    cum_photon_prob = np.cumsum(y_pred, axis=-1)
+    cum_pe_prob = np.cumsum(y_pred, axis=-1)
     samples = np.arange(y_pred.shape[1])
     samples_bins = np.arange(y_pred.shape[1] + 1)
     timebin = np.zeros_like(y_pred)
     for b in range(y_pred.shape[0]):
-        integer_n_photon = np.arange(0.5, np.round(cum_photon_prob[b, -1]) + 0.5)
-        photon_samples = np.interp(integer_n_photon, cum_photon_prob[b, :], samples)
-        timebin[b, :], _ = np.histogram(photon_samples, samples_bins)
+        integer_n_pe = np.arange(0.5, np.round(cum_pe_prob[b, -1]) + 0.5)
+        pe_samples = np.interp(integer_n_pe, cum_pe_prob[b, :], samples)
+        timebin[b, :], _ = np.histogram(pe_samples, samples_bins)
     return timebin
 
 
@@ -50,12 +50,12 @@ def train_cnn():
 
     # toy parameters
     n_sample_init = 20
-    photon_rate_mhz = 0, 200
+    pe_rate_mhz = 0, 200
     bin_size_ns = 0.5
     sampling_rate_mhz = 250
     amplitude_gain = 5.
     noise_lsb = 0  # 1.05
-    sigma_smooth_photon_ns = 2
+    sigma_smooth_pe_ns = 2
 
     # model definition
     n_sample = 90
@@ -103,10 +103,10 @@ def train_cnn():
     # data generation for training
     generator = generator_for_training(
         n_event=None, batch_size=batch_size, n_sample=n_sample + n_sample_init,
-        n_sample_init=n_sample_init, photon_rate_mhz=photon_rate_mhz,
+        n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
-        sigma_smooth_photon_ns=sigma_smooth_photon_ns
+        sigma_smooth_pe_ns=sigma_smooth_pe_ns
     )
 
     # training
@@ -115,13 +115,13 @@ def train_cnn():
                '_kernel' + str(kernel_size) + '_lr' + str(lr)
     #run_name += '_dense'
     run_name += '_LC'
-    if np.size(photon_rate_mhz) > 1:
-        run_name += '_rate' + str(photon_rate_mhz[0]) + '-' + \
-                    str(photon_rate_mhz[1])
+    if np.size(pe_rate_mhz) > 1:
+        run_name += '_rate' + str(pe_rate_mhz[0]) + '-' + \
+                    str(pe_rate_mhz[1])
     else:
-        run_name += '_rate' + str(photon_rate_mhz[0])
-    if sigma_smooth_photon_ns > 0:
-        run_name += '_smooth' + str(sigma_smooth_photon_ns)
+        run_name += '_rate' + str(pe_rate_mhz[0])
+    if sigma_smooth_pe_ns > 0:
+        run_name += '_smooth' + str(sigma_smooth_pe_ns)
     while os.path.exists('./Graph/' + run_name + '_run' + str(run)):
         run += 1
 
@@ -143,12 +143,12 @@ def train_cnn():
 def continue_train_cnn(run_name):
     # toy parameters
     n_sample_init = 20
-    photon_rate_mhz = (0, 200)
+    pe_rate_mhz = (0, 200)
     bin_size_ns = 0.5
     sampling_rate_mhz = 250
     amplitude_gain = 5.
     noise_lsb = (0.5, 3)  # 1.05
-    sigma_smooth_photon_ns = 2
+    sigma_smooth_pe_ns = 2
 
     # training parameters
     steps_per_epoch = 1e2  # 1 step feed a batch of events
@@ -171,10 +171,10 @@ def continue_train_cnn(run_name):
     # data generation for training
     generator = generator_for_training(
         n_event=None, batch_size=batch_size, n_sample=n_sample + n_sample_init,
-        n_sample_init=n_sample_init, photon_rate_mhz=photon_rate_mhz,
+        n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
-        sigma_smooth_photon_ns=sigma_smooth_photon_ns
+        sigma_smooth_pe_ns=sigma_smooth_pe_ns
     )
     # training
     model.fit_generator(
@@ -188,6 +188,6 @@ def continue_train_cnn(run_name):
 
 
 if __name__ == '__main__':
-    #train_cnn()
-    continue_train_cnn('conv_filter488_kernel10_lr0.001_LC_rate0-200_smooth2_run0rrrr')
+    train_cnn()
+    continue_train_cnn('cnn-example')
 
