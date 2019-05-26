@@ -136,6 +136,20 @@ def _get_batch(
     return waveform_batch, n_pe_batch
 
 
+def gauss_kernel(bin_size_ns, sigma_ns):
+    """
+    create a centered gaussian kernel on +-5 sigmas.
+    :param bin_size_ns: interval in nano-seconds beween two consecutive kernel elements.
+    :param sigma_ns: width of the guassian in nano-seconds
+    :return: an numpy array of floats with the number of elements to go from -5 sigma_ns to + 5 sigma_ns by steps of sigma_ns containing the amplitude of a gaussian centered on 0 and whose width is sigma_ns.
+    """
+    nbin_5sigma = int(np.round(sigma_ns * 5 / bin_size_ns))
+    t_kernel = np.arange(-nbin_5sigma, nbin_5sigma + .1, 1) * bin_size_ns
+    gauss_kernel = np.exp(-0.5 * (t_kernel/ sigma_ns) ** 2)
+    gauss_kernel /= np.sum(gauss_kernel)
+    return gauss_kernel
+
+
 def generator_for_training(
         n_event=None, batch_size=1, n_sample=90, n_sample_init=20,
         pe_rate_mhz=100, bin_size_ns=0.5, sampling_rate_mhz=250,
@@ -181,19 +195,16 @@ def generator_for_training(
         raise RuntimeError('there must be an integer number of bin per sample')
     n_bin_per_sample = int(n_bin_per_sample)
     # prepare kernel
-    gauss_kernel = None
+    kernel = None
     if sigma_smooth_pe_ns > 0:
-        nbin_5sigma = int(np.round(sigma_smooth_pe_ns * 5 / bin_size_ns))
-        t_kernel = np.arange(-nbin_5sigma, nbin_5sigma + .1, 1) * bin_size_ns
-        gauss_kernel = np.exp(-0.5 * (t_kernel/ sigma_smooth_pe_ns) ** 2)
-        gauss_kernel /= np.sum(gauss_kernel)
-        print("gaussian kernel prepared, shape=", gauss_kernel.shape)
+        kernel = gauss_kernel(bin_size_ns=bin_size_ns, sigma_ns=sigma_smooth_pe_ns)
+        print("gaussian kernel prepared, shape=", kernel.shape)
     if n_event is None:
         while True:
             waveform_batch, n_pe_batch = _get_batch(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
-                kernel=gauss_kernel
+                kernel=kernel
             )
             yield (waveform_batch, n_pe_batch)
     else:
@@ -201,9 +212,57 @@ def generator_for_training(
             waveform_batch, n_pe_batch = _get_batch(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
-                kernel=gauss_kernel
+                kernel=kernel
             )
             yield (waveform_batch, n_pe_batch)
+
+
+def model_predict(model, big_input, max_sample=1e5, continuous_waveform=False):
+    """
+    Do model prediction, reshaping the input as needed to feed the model.
+    :param model: tf.keras.model object (typically from tf.keras.models.load_model() )
+    :param big_input: data used to make predictions
+    :param max_sample: maximum number of samples to be run together. if the input is bigger, prection will be done by parts
+    :param continuous_waveform: if True, the different waveforms within the batch are traited as they are a single long waveform.
+    :return: 
+    """
+    initial_shape = big_input.shape
+    if continuous_waveform:
+        big_input = big_input.reshape[1, -1]
+    n_sample_input = big_input.shape[1]
+    print("model input shape:", model.input_shape)
+    n_sample_network_input = model.input_shape[1]
+    n_bin_network_output = model.output_shape[1]
+    if abs((n_sample_network_input / n_bin_network_output) % 1) > 0.01:
+        raise ValueError('model is not compatible with model_predict() as there is not a integer number of output time bin per number of input sample')
+    nbin_per_sample = int(np.round(n_sample_network_input / n_bin_network_output))
+    n_batch_input = model.input_shape[0]
+    n_batch_network_input = int(np.floor(max_sample / n_sample_network_input)
+    big_output = np.zeros([big_input.shape[0], n_sample_input * nbin_per_sample])
+    for sub_batch_start in range(0, n_batch_input, n_batch_network_input)
+        n_sub_batch_input = min(n_batch_input, n_batch_network_input)
+        sub_batch_stop = min(sub_batch_start+n_sub_batch_input, n_batch_network_input)
+        sub_batch_input = big_input[sub_batch_start:sub_batch_stop, :]
+        n_sub_batch_input = sub_batch_input.shape[0]
+        sub_batch_pred = np.zeros([n_sub_batch_input, nbin_per_sample * n_sample_input])
+        for sample_start in range(0, n_sample_input, n_sample_network_input):
+            sample_end = n_sample_input + n_sample_network_input
+            if sample_end > n_sample_network_input:  # too small imput
+                print('WARNING: input too small ({} samples) for network with {} samples as input. Padding with 0s.'.format(n_sample_input, n_sample_network_input))
+                n_valid_sample = n_sample_network_input - n_sample_input
+                input_network = np.zeros([n_sub_batch_input, n_sample_network_input])
+                input_network[:, :n_valid_sample] = sub_batch_input[:, sample_start:]
+            else:
+                n_valid_sample = sample_end - n_sample_input
+                input_network = sub_batch_input[:, sample_start:sample_end]
+            pred_network = model.predict(input_network)
+            bin_start = sample_start * nbin_per_sample
+            n_valid_bin = n_valid_sample * nbin_per_sample
+            bin_end = bin_start + n_valid_bin
+            sub_batch_pred[:, bin_start:bin_end] = pred_network[:, :n_valid_bin]
+        big_output[sub_batch_start:sub_batch_stop, :] = sub_batch_pred
+    output = big_output.reshape([initial_shape[0], initial_shape[1] * nbin_per_sample])
+    return output
 
 
 def plot_example(
@@ -240,3 +299,4 @@ if __name__ == '__main__':
         pe_rate_mhz=20, bin_size_ns=0.5, sampling_rate_mhz=250,
         amplitude_gain=5., noise_lsb=1.05
     )
+
