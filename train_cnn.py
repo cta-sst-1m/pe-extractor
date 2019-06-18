@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import tensorflow as tf
-from toy import generator_for_training
+from toy import generator_nsb
 from keras import backend as K
 
 
@@ -101,7 +101,7 @@ def train_cnn():
     print("number of parameters:", model.count_params())
 
     # data generation for training
-    generator = generator_for_training(
+    generator = generator_nsb(
         n_event=None, batch_size=batch_size, n_sample=n_sample + n_sample_init,
         n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
@@ -169,8 +169,8 @@ def continue_train_cnn(run_name):
         batch_size=batch_size
     )
     # data generation for training
-    generator = generator_for_training(
-        n_event=None, batch_size=batch_size, n_sample=n_sample + n_sample_init,
+    generator = generator_nsb(
+        n_event=1, batch_size=batch_size, n_sample=n_sample + n_sample_init,
         n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,

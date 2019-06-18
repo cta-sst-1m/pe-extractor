@@ -84,7 +84,7 @@ def waveform_from_n_pe(
     return waveform
 
 
-def _get_batch(
+def _get_batch_nsb(
         batch_size, n_sample, n_bin_per_sample, pe_rate_mhz, bin_size_ns,
         template_amplitude_bin, noise_lsb, n_sample_init, kernel=None
 ):
@@ -136,6 +136,30 @@ def _get_batch(
     return waveform_batch, n_pe_batch
 
 
+def _get_batch_flash(
+                batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
+                template_amplitude_bin, noise_lsb
+):
+    n_bin = n_sample * n_bin_per_sample
+    n_pe_batch = np.zeros([batch_size, n_bin])
+    amplitude_min = np.min(n_pe_flash)
+    amplitude_max = np.max(n_pe_flash)
+    diff_ampltidute = amplitude_max - amplitude_min
+    noise_min = np.min(noise_lsb)
+    noise_max = np.max(noise_lsb)
+    diff_noise = noise_max - noise_min
+    noise_lsb_batch = np.random.random(batch_size) * diff_noise + noise_min
+    pe_flash = amplitude_min + diff_ampltidute * np.random.random(batch_size)
+    n_pe_batch[:, bin_flash] = pe_flash
+    waveform_batch = np.zeros([batch_size, n_sample])
+    for b in range(batch_size):
+        waveform_batch[b, :] = waveform_from_n_pe(
+            n_pe_batch[b, :], template_amplitude_bin,
+            n_bin_per_sample=n_bin_per_sample, noise_lsb=noise_lsb_batch[b]
+        )
+    return waveform_batch, n_pe_batch
+
+
 def gauss_kernel(bin_size_ns, sigma_ns):
     """
     create a centered gaussian kernel on +-5 sigmas.
@@ -150,7 +174,61 @@ def gauss_kernel(bin_size_ns, sigma_ns):
     return gauss_kernel
 
 
-def generator_for_training(
+def generator_flash(
+        n_event=None, batch_size=1, n_sample=90, bin_flash=80,
+        n_pe_flash=(1, 100), bin_size_ns=0.5, sampling_rate_mhz=250,
+        amplitude_gain=5., noise_lsb=1.05
+):
+    """
+    Generator returning for each iteration a batch of waveforms and a batch of
+    pes. N photo-electrons are created at the same time (at after bin_flash
+    bins), N being taken randomly in the range defined by n_pe_flash for
+    each events.
+    :param n_event: number of event returned. If None the generator never stops
+    to return events.
+    :param batch_size: number of events in each batch.
+    :param n_sample: number of samples to simulate.
+    :param bin_flash: index of the bin where the flash's photo-electrons are.
+    :param n_pe_flash: Tuple giving the range of flash amplitude in
+    photo-electrons. Each flash has a random amplitude taken in that range.
+    :param bin_size_ns: size of a bin in nanoseconds for the photo-electrons.
+    :param sampling_rate_mhz: sampling rate for the waveforms array.
+    :param amplitude_gain: amplitude of a 1.pe. peak in LSB.
+    :param noise_lsb: amplitude of random noise to add to the waveforms.
+    Can be a tuple, then for each event of all batches the rate is taken in
+    the range given by the tuple.
+    :return: a generator of tuple of 2 arrays at each iteration. First array is
+    a batch of waveforms (amplitude of the sampled signal) and a batch of pes
+    (number of pes per bin). For both, first dimension is the batch iteration,
+    second is along time (bin or sample).
+    """
+    template_amplitude_bin = prepare_pulse_template(
+        template_path='pulse_templates/SST-1M_01.txt',
+        amplitude_gain=amplitude_gain,
+        bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz
+    )
+    sample_size_ns = 1000 / sampling_rate_mhz
+    n_bin_per_sample = sample_size_ns / bin_size_ns
+    if abs(n_bin_per_sample - int(n_bin_per_sample)) > 1e-6:
+        raise RuntimeError('there must be an integer number of bin per sample')
+    n_bin_per_sample = int(n_bin_per_sample)
+    if n_event is None:
+        while True:
+            waveform_batch, n_pe_batch = _get_batch_flash(
+                batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
+                template_amplitude_bin, noise_lsb,
+            )
+            yield (waveform_batch, n_pe_batch)
+    else:
+        for event in range(n_event):
+            waveform_batch, n_pe_batch = _get_batch_flash(
+                batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
+                template_amplitude_bin, noise_lsb,
+            )
+            yield (waveform_batch, n_pe_batch)
+
+
+def generator_nsb(
         n_event=None, batch_size=1, n_sample=90, n_sample_init=20,
         pe_rate_mhz=100, bin_size_ns=0.5, sampling_rate_mhz=250,
         amplitude_gain=5., noise_lsb=1.05, sigma_smooth_pe_ns=0.
@@ -161,8 +239,8 @@ def generator_for_training(
     occurs.
     :param n_event: number of event returned. If None the generator never stops
     to return events.
-    :param batch_size: size of the batch size
-    :param n_sample: number of sample to simulate. Must be larger than
+    :param batch_size: number of events in each batch.
+    :param n_sample: number of samples to simulate. Must be larger than
     n_sample_init. Only n_sample - n_sample_init samples are returned for each
     waveform.
     :param n_sample_init: number of samples to skip at the beginning to take
@@ -170,7 +248,7 @@ def generator_for_training(
     :param pe_rate_mhz: rate of pe to simulate. Can be a tuple, then
     for each event of all batches the rate is taken in the range given by the
     tuple.
-    :param bin_size_ns: size of bins in nanoseconds for the pes array.
+    :param bin_size_ns: size of bins in nanoseconds for the photo-electrons.
     :param sampling_rate_mhz: sampling rate for the waveforms array.
     :param amplitude_gain: amplitude of a 1.pe. peak in LSB.
     :param noise_lsb: amplitude of random noise to add to the waveforms. Can be a tuple, then
@@ -180,9 +258,9 @@ def generator_for_training(
     convolve with the batch of pes. Use to convert the position of pe
     to a probability of with sigma_smooth_pe_ns. No convolution is done if
     sigma_smooth_pe_ns <= 0.
-    :return: a tuple of 2 arrays at each iteration. First array is a batch of
-    waveforms (amplitude of the sampled signal) and a batch of pes (number
-    of pes per bin). For both, first dimension is the batch iteration,
+    :return: a generator of tuple of 2 arrays at each iteration. First array is
+    a batch of waveforms (amplitude of the sampled signal) and a batch of pes
+    (number of pes per bin). For both, first dimension is the batch iteration,
     second is along time (bin or sample).
     """
     template_amplitude_bin = prepare_pulse_template(
@@ -201,7 +279,7 @@ def generator_for_training(
         print("gaussian kernel prepared, shape=", kernel.shape)
     if n_event is None:
         while True:
-            waveform_batch, n_pe_batch = _get_batch(
+            waveform_batch, n_pe_batch = _get_batch_nsb(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
                 kernel=kernel
@@ -209,7 +287,7 @@ def generator_for_training(
             yield (waveform_batch, n_pe_batch)
     else:
         for event in range(n_event):
-            waveform_batch, n_pe_batch = _get_batch(
+            waveform_batch, n_pe_batch = _get_batch_nsb(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
                 kernel=kernel
@@ -217,49 +295,98 @@ def generator_for_training(
             yield (waveform_batch, n_pe_batch)
 
 
-def model_predict(model, big_input, max_sample=1e5, continuous_waveform=False):
+def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
+                  skip_bins=56):
     """
     Do model prediction, reshaping the input as needed to feed the model.
-    :param model: tf.keras.model object (typically from tf.keras.models.load_model() )
+    :param model: tf.keras.model object
+    (typically from tf.keras.models.load_model() )
     :param big_input: data used to make predictions
-    :param max_sample: maximum number of samples to be run together. if the input is bigger, prection will be done by parts
-    :param continuous_waveform: if True, the different waveforms within the batch are traited as they are a single long waveform.
-    :return: 
+    :param max_sample: maximum number of samples to be run together.
+    If the input is bigger, prection will be done by parts
+    :param continuous_waveform: if True, the different waveforms
+    within the batch are traited as they are a single long waveform.
+    :param skip_bins: number of bin at the begining and at the end
+    of the prediction to discard
+    :return:
     """
     initial_shape = big_input.shape
     if continuous_waveform:
         big_input = big_input.reshape[1, -1]
     n_sample_input = big_input.shape[1]
-    print("model input shape:", model.input_shape)
     n_sample_network_input = model.input_shape[1]
     n_bin_network_output = model.output_shape[1]
-    if abs((n_sample_network_input / n_bin_network_output) % 1) > 0.01:
-        raise ValueError('model is not compatible with model_predict() as there is not a integer number of output time bin per number of input sample')
-    nbin_per_sample = int(np.round(n_sample_network_input / n_bin_network_output))
-    n_batch_input = model.input_shape[0]
-    n_batch_network_input = int(np.floor(max_sample / n_sample_network_input)
-    big_output = np.zeros([big_input.shape[0], n_sample_input * nbin_per_sample])
-    for sub_batch_start in range(0, n_batch_input, n_batch_network_input)
-        n_sub_batch_input = min(n_batch_input, n_batch_network_input)
-        sub_batch_stop = min(sub_batch_start+n_sub_batch_input, n_batch_network_input)
+    if abs((n_bin_network_output / n_sample_network_input ) % 1) > 0.01:
+        raise ValueError('model is not compatible with model_predict()',
+                         'as there is not a integer number of output time bin',
+                         'per number of input sample')
+    nbin_per_sample = int(
+        np.round(n_bin_network_output / n_sample_network_input)
+    )
+    skip_sample = int(np.ceil(skip_bins / nbin_per_sample))
+    if skip_sample * nbin_per_sample != skip_bins:
+        skip_bins = skip_sample * nbin_per_sample
+        print('WARNING: skip_sample changed to', skip_bins,
+              'to have a correspoding integer number of samples')
+    #print('nbin_per_sample:', nbin_per_sample)
+    n_batch_input = big_input.shape[0]
+    n_batch_max_network = int(np.floor(max_sample / n_sample_network_input))
+    big_output = np.zeros([n_batch_input, n_sample_input * nbin_per_sample])
+    #print('n_batch_max_network:', n_batch_max_network)
+    #print('n_batch_input:', n_batch_input)
+    sub_batch_start_events = range(
+        0,
+        min(n_batch_max_network, n_batch_input),
+        n_batch_input
+    )
+    for sub_batch_start in sub_batch_start_events:
+        sub_batch_stop = min(sub_batch_start+n_batch_max_network, n_batch_input)
         sub_batch_input = big_input[sub_batch_start:sub_batch_stop, :]
+        #print('sub_batch_start:', sub_batch_start)
+        #print('sub_batch_stop:', sub_batch_stop)
+        #print('sub_batch_input.shape:', sub_batch_input.shape)
         n_sub_batch_input = sub_batch_input.shape[0]
-        sub_batch_pred = np.zeros([n_sub_batch_input, nbin_per_sample * n_sample_input])
-        for sample_start in range(0, n_sample_input, n_sample_network_input):
-            sample_end = n_sample_input + n_sample_network_input
-            if sample_end > n_sample_network_input:  # too small imput
-                print('WARNING: input too small ({} samples) for network with {} samples as input. Padding with 0s.'.format(n_sample_input, n_sample_network_input))
-                n_valid_sample = n_sample_network_input - n_sample_input
+        sub_batch_pred = np.zeros(
+            [n_sub_batch_input, nbin_per_sample * n_sample_input]
+        )
+        sample_start_points = range(
+            0,
+            n_sample_input,
+            n_sample_network_input - 2 * skip_sample
+        )
+        for sample_start in sample_start_points:
+            sample_end = sample_start + n_sample_network_input
+            #print('sample_start:', sample_start)
+            #print('sample_end:', sample_end)
+            #print('n_sample_network_input:', n_sample_network_input)
+            if sample_end > n_sample_input:  # too small imput
+                print('WARNING: input too small ({} samples) for network with {} samples as input. Padding with 0s.'.format(n_sample_input-sample_start, n_sample_network_input))
+                n_valid_sample = n_sample_input - sample_start
                 input_network = np.zeros([n_sub_batch_input, n_sample_network_input])
                 input_network[:, :n_valid_sample] = sub_batch_input[:, sample_start:]
             else:
-                n_valid_sample = sample_end - n_sample_input
+                n_valid_sample = sample_end - sample_start
                 input_network = sub_batch_input[:, sample_start:sample_end]
+            #print('n_valid_sample:', n_valid_sample)
+            #print('input_network.shape', input_network.shape)
             pred_network = model.predict(input_network)
+            #print('pred_network.shape', pred_network.shape)
             bin_start = sample_start * nbin_per_sample
             n_valid_bin = n_valid_sample * nbin_per_sample
-            bin_end = bin_start + n_valid_bin
-            sub_batch_pred[:, bin_start:bin_end] = pred_network[:, :n_valid_bin]
+            if sample_start != 0:
+                #we discard prediction for the first and last skip_bins
+                bin_start = bin_start + skip_bins
+                n_valid_bin -= 2 * skip_bins
+                bin_end = bin_start + n_valid_bin
+                # print('bin_start:', bin_start, 'bin_end:', bin_end)
+                sub_batch_pred[:, bin_start:bin_end] = pred_network[:, skip_bins:n_valid_bin+skip_bins]
+            else:
+                # we discard prediction for the last skip_bins
+                n_valid_bin -= skip_bins
+                bin_end = bin_start + n_valid_bin
+                # print('bin_start:', bin_start, 'bin_end:', bin_end)
+                sub_batch_pred[:, bin_start:bin_end] = pred_network[:, :n_valid_bin]
+            #print('n_valid_bin:', n_valid_bin)
         big_output[sub_batch_start:sub_batch_stop, :] = sub_batch_pred
     output = big_output.reshape([initial_shape[0], initial_shape[1] * nbin_per_sample])
     return output
@@ -272,7 +399,7 @@ def plot_example(
 ):
     from matplotlib import pyplot as plt
 
-    generator = generator_for_training(
+    generator = generator_nsb(
         n_event=n_event, batch_size=batch_size, n_sample=n_sample,
         n_sample_init=n_sample_init,
         pe_rate_mhz=pe_rate_mhz, bin_size_ns=bin_size_ns,
@@ -291,12 +418,76 @@ def plot_example(
             ax1.plot(t_bin, n_pe_per_bin)
             ax2.plot(t_waveform, waveform)
     plt.show()
-    
+
+
+def _read_experimental(rootfile, start=None, stop=None, step=None):
+    import root_numpy
+
+    wf0 = root_numpy.root2array(rootfile, "waveforms", "wf1",
+                                start=start, stop=stop, step=step)
+    wf1 = root_numpy.root2array(rootfile, "waveforms", "wf2",
+                                start=start, stop=stop, step=step)
+    return wf0, wf1
+
+
+def read_experimental(rootfiles, start=None, stop=None, step=None):
+    if isinstance(rootfiles, str):
+        wf0, wf1 = _read_experimental(
+            rootfiles, start=start, stop=stop, step=step
+        )
+        if wf0.ndim == 1 or wf1.ndim == 1:
+            wf0 = wf0.reshape([1, -1])
+            wf1 = wf1.reshape([1, -1])
+        return wf0, wf1
+    else:
+        wf0_list = []
+        wf1_list = []
+        for rootfile in rootfiles:
+            wf0, wf1 = _read_experimental(
+                rootfile, start=start, stop=stop, step=step
+            )
+            wf0_list.append(wf0)
+            wf1_list.append(wf1)
+        return np.stack(wf0_list), np.stack(wf1_list)
+
+
+def plot_waveforms(*waveforms):
+    from matplotlib import pyplot as plt
+
+    n_wf = len(waveforms)
+    fig, axes = plt.subplots(n_wf, 1, sharex=True)
+    for i, wf in enumerate(waveforms):
+        axes[i].plot(waveforms[i].T)
+    plt.show()
+    plt.close(fig)
+
+
+def hist_waveforms(*waveforms):
+    from matplotlib import pyplot as plt
+
+    n_wf = len(waveforms)
+    fig, axes = plt.subplots(n_wf, 1, sharex=True)
+    for i, wf in enumerate(waveforms):
+        axes[i].hist(
+            waveforms[i].T,
+            np.arange(np.min(waveforms[i])-1, np.max(waveforms[i])+1, 1)
+        )
+        axes[i].set_yscale('log')
+    plt.show()
+    plt.close(fig)
+
 
 if __name__ == '__main__':
-    plot_example(
-        n_event=3, batch_size=2, n_sample=90, n_sample_init=20,
-        pe_rate_mhz=20, bin_size_ns=0.5, sampling_rate_mhz=250,
-        amplitude_gain=5., noise_lsb=1.05
-    )
-
+    plot_example(n_event=3, batch_size=2, n_sample=90, n_sample_init=20, pe_rate_mhz=20, bin_size_ns=0.5, sampling_rate_mhz=250, amplitude_gain=5., noise_lsb=1.05)
+    # wf0_hvoff, wf1_hvoff = read_experimental(
+    #     'experimental_waveforms/SST1M_01_20190523_0000_0000_raw_waveforms.root',
+    #     start=None, stop=100, step=None
+    # )
+    # baseline_wf0 = np.mean(wf0_hvoff)
+    # baseline_wf1 = np.mean(wf1_hvoff)
+    # wf0, wf1 = read_experimental(
+    #     'experimental_waveforms/SST1M_01_20190523_0104_0108_raw_waveforms.root',
+    #     start=None, stop=100, step=None
+    # )
+    # hist_waveforms(wf0.flatten()-baseline_wf0, wf1.flatten()-baseline_wf1)
+    # plot_waveforms(wf0, wf1)
