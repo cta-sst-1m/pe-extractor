@@ -1,10 +1,10 @@
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
-from toy import generator_for_training
-from train_cnn import loss_all, loss_cumulative, loss_chi2, loss_continuity, \
-    timebin_from_prediction
+from toy import generator_for_training, generator_andrii_toy
+from train_cnn import loss_all, loss_cumulative, loss_chi2, loss_continuity
 import tensorflow as tf
+import os
 
 
 def sum_norm_gaussian(x_val, offset, *args):
@@ -34,7 +34,9 @@ def fit_sum_norm_gaussian(
     x_max = x_array[-1] + 10.
     if cen_init is None:
         # distribute Gaussian initial position
-        gauss_cen_init = np.linspace(x_array[0], x_array[-1], n_gaussian + 2)[1:-1]
+        gauss_cen_init = np.linspace(
+            x_array[0], x_array[-1], n_gaussian + 2
+        )[1:-1]
     else:
         cen_init = np.array(cen_init)
         gauss_cen_init = cen_init[cen_init >= x_min]
@@ -70,8 +72,9 @@ def fit_sum_norm_gaussian(
 
 
 def run_prediction(
-        run_name, pe_rate_mhz=30,sampling_rate_mhz=250, batch_size=400, noise_lsb=1.05,
-        bin_size_ns=0.5, n_sample=90, sigma_smooth_pe_ns=0.
+        run_name, pe_rate_mhz=30, sampling_rate_mhz=250, batch_size=400,
+        noise_lsb=1.05, bin_size_ns=0.5, n_sample=90, sigma_smooth_pe_ns=0.,
+        baseline=0, relative_gain_std=0.1
 ):
     # toy parameters
     n_sample_init = 20
@@ -82,9 +85,15 @@ def run_prediction(
         n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
-        sigma_smooth_pe_ns=sigma_smooth_pe_ns
+        sigma_smooth_pe_ns=sigma_smooth_pe_ns, baseline=baseline,
+        relative_gain_std=relative_gain_std
     )
-    waveform, pe = next(generator)
+    generator_andrii = generator_andrii_toy(
+        '/home/yves/Downloads/2.8V_8e+07_Hz_Compenstion_Off_test.root',
+        batch_size=batch_size, n_sample=n_sample, n_bin_per_sample=8
+    )
+
+    waveform, pe = next(generator_andrii)
 
     model = tf.keras.models.load_model(
         './Model/' + run_name + '.h5',
@@ -123,11 +132,8 @@ def pe_stat(bin_size_ns, pe_truth, predict_pe):
 
 def plot_prediction(
         bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
-        title=None, filename=None
+        title=None, filename=None, gaussian_fit=False
 ):
-    offset, center, width, d_offset, d_center, d_width = pe_stat(
-        bin_size_ns, pe_truth[0, :], predict_pe[0, :]
-    )
     n_bin = pe_truth.shape[1]
     t_pe_ns = np.arange(0, n_bin) * bin_size_ns
 
@@ -140,11 +146,17 @@ def plot_prediction(
         predict_pe[0, 50:-50],
         label="probability predicted"
     )
-    axes[1].plot(
-        t_pe_ns[50:-50],
-        sum_norm_gaussian(t_pe_ns[50:-50], offset, *center, *width) * bin_size_ns,
-        '--', label="gaussian fit",
-    )
+    if gaussian_fit:
+        offset, center, width, d_offset, d_center, d_width = pe_stat(
+            bin_size_ns, pe_truth[0, :], predict_pe[0, :]
+        )
+        axes[1].plot(
+            t_pe_ns[50:-50],
+            sum_norm_gaussian(
+                t_pe_ns[50:-50], offset, *center, *width
+            ) * bin_size_ns,
+            '--', label="gaussian fit $\sigma=${:.3}".format(np.mean(width)),
+        )
     axes[1].set_ylabel('# pe')
     axes[1].legend()
     axes[2].plot(
@@ -188,9 +200,9 @@ def plot_probability_check(predict_pe, pe_truth, n_bin=50,
         order_prediction = np.argsort(pred)
         cumsum_pe_ordered_pred = np.cumsum(pe[order_prediction])
         pred_bins = [pred_bin_min, ]
-        for bin in range(n_bin - 1):
+        for bin_index in range(n_bin - 1):
             index_limit = np.searchsorted(
-                cumsum_pe_ordered_pred, n_pe_bins[bin]
+                cumsum_pe_ordered_pred, n_pe_bins[bin_index]
             )
             pred_bins.append(pred[order_prediction[index_limit]])
         pred_bins.append(pred_bin_max)
@@ -201,16 +213,15 @@ def plot_probability_check(predict_pe, pe_truth, n_bin=50,
         raise ValueError(
             'binning must be either \'adaptive\' or \'constant_size\'.'
         )
-    histo_pred, _ = np.histogram(
-        predict_pe, pred_bins
-    )
-    histo_pe = np.zeros_like(histo_pred)
-    for bin in range(len(pred_bins) - 1):
+    histo_pe = np.zeros(n_bin)
+    histo_pred = np.zeros(n_bin)
+    for bin_index in range(len(pred_bins) - 1):
         mask_pred_bin = np.logical_and(
-            pred_bins[bin] <= predict_pe,
-            predict_pe < pred_bins[bin+1]
+            pred_bins[bin_index] <= predict_pe,
+            predict_pe < pred_bins[bin_index+1]
         )
-        histo_pe[bin] = np.sum(pe_truth[mask_pred_bin])
+        histo_pe[bin_index] = np.sum(pe_truth[mask_pred_bin])
+        histo_pred[bin_index] = np.sum(mask_pred_bin)
     pred_bins_center = 0.5 * (pred_bins[1:] + pred_bins[:-1])
     d_pred_bins = pred_bins[1:] - pred_bins[:-1]
     plt.errorbar(
@@ -233,7 +244,7 @@ def plot_probability_check(predict_pe, pe_truth, n_bin=50,
     plt.close(fig)
 
 
-def histo_resolution(bin_size_ns, pe_truth, predict_pe,
+def histo_resolution(bin_size_ns, pe_truth, predict_pe, bins=100,
                      title=None, filename=None):
     batch_size = pe_truth.shape[0]
     resolutions = []
@@ -247,7 +258,7 @@ def histo_resolution(bin_size_ns, pe_truth, predict_pe,
             continue
         resolutions.extend(width[d_width < 2])
     fig = plt.figure(figsize=(8, 6))
-    plt.hist(resolutions, 100)
+    plt.hist(resolutions, bins)
     if title is not None:
         plt.title(title)
     plt.tight_layout()
@@ -259,12 +270,14 @@ def histo_resolution(bin_size_ns, pe_truth, predict_pe,
 
 
 def demo(run_name):
-    pe_rate_mhz = 20
-    batch_size = 400
-    sigma_smooth_pe_ns = 0.
+    pe_rate_mhz = 80
+    batch_size = int(1e3)
+    sigma_smooth_pe_ns = 0
+    baseline = 0
+    relative_gain_std = .1
 
     sampling_rate_mhz = 250
-    noise = [0, 1, 2, 3, 4, 5]  # 1.05
+    noise = [0, 1, 2, 3]  # 1.05
     bin_size_ns = 0.5
     n_sample = 90
     for noise_lsb in noise:
@@ -274,24 +287,34 @@ def demo(run_name):
             run_name, pe_rate_mhz=pe_rate_mhz,
             sampling_rate_mhz=sampling_rate_mhz, batch_size=batch_size,
             noise_lsb=noise_lsb, bin_size_ns=bin_size_ns,
-            n_sample=n_sample, sigma_smooth_pe_ns=sigma_smooth_pe_ns
+            n_sample=n_sample, sigma_smooth_pe_ns=sigma_smooth_pe_ns,
+            baseline=baseline, relative_gain_std=relative_gain_std
         )
         t_samples_ns = np.arange(0, n_sample) * 1000 / sampling_rate_mhz
+        directory_plot = 'plots/' + run_name
+        try:
+            os.makedirs(directory_plot)
+        except FileExistsError:
+            pass
         plot_prediction(
             bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
-            filename='plots/predict_noise' + str(noise_lsb) + '.png',
-            title=title
+            filename=directory_plot + '/predict_noise' +
+                     str(noise_lsb) + '.png',
+            title=title, gaussian_fit=False
         )
         plot_probability_check(
             predict_pe, pe_truth,
-            filename='plots/probability_noise' + str(noise_lsb) + '.png',
+            filename=directory_plot + '/probability_noise' +
+                     str(noise_lsb) + '.png',
             title=title
         )
         histo_resolution(
-            bin_size_ns, pe_truth, predict_pe,
-            filename='plots/resolution_noise' + str(noise_lsb) + '.png',
-            title=title
+             bin_size_ns, pe_truth[:1, :], predict_pe[:1, :],
+            filename=directory_plot + '/resolution_noise' +
+                     str(noise_lsb) + '.png',
+            title=title, bins=50
         )
 
+
 if __name__ == '__main__':
-    demo('cnn-example')
+    demo('deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth2.0_noise0-2_baseline0_run0rr')
