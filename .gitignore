@@ -1,0 +1,6 @@
+Model/
+__pycache__/
+plots/
+oldGraph/
+.idea/
+Graph/
