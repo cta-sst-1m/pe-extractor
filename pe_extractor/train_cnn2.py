@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import tensorflow as tf
-from toy import generator_nsb
+from pe_extractor.toy import generator_nsb
 from keras import backend as K
 
 
@@ -59,7 +59,7 @@ def loss_all(y_true, y_pred):
     loss_cum = loss_cumulative(y_true, y_pred)
     loss_chi = loss_chi2(y_true, y_pred)
     loss_cont = loss_continuity(y_true, y_pred)
-    return 10*loss_cum + loss_chi + loss_cont
+    return 10 * loss_cum + loss_chi + loss_cont
 
 
 def loss_continuity(_, y_pred):
@@ -137,10 +137,10 @@ def timebin_from_prediction(y_pred):
 
 def train_cnn():
     # training parameters
-    steps_per_epoch = 200  # 1 step feed a batch of events
-    batch_size = 200  # number of waveform per batch
-    epochs = 50
-    lr = 3e-4  # 1e-4
+    steps_per_epoch = 100  # 1 step feed a batch of events
+    batch_size = 400  # number of waveform per batch
+    epochs = 10
+    lr = 1e-3  # 1e-4
 
     # toy parameters
     n_sample_init = 20
@@ -148,70 +148,45 @@ def train_cnn():
     bin_size_ns = 0.5
     sampling_rate_mhz = 250
     amplitude_gain = 5.
-    noise_lsb = 0.5, 1.5  # 1.05
-    sigma_smooth_pe_ns = 2.
+    noise_lsb = 0  # 1.05
+    sigma_smooth_pe_ns = 0.25
     baseline = 0
-    relative_gain_std = 0.1
 
     # model definition
     n_sample = 90
-    kernel_layers = [20, 10, 10, 10, 1, 1, 1]
-    filter_layers = [16, 8, 4, 2, 1, 1, 1]
-    n_conv = len(filter_layers)
-    assert len(kernel_layers) == n_conv
-    padding = "anticausal"
+    n_filer1 = 4
+    kernel_size = 10
+    n_filer2 = 8
+    n_filer3 = 8
+    padding = "same"  # same
     model = tf.keras.Sequential([
         tf.keras.layers.Reshape(
             [n_sample, 1], input_shape=[n_sample], name="input_reshape"
         ),
-    ])
-    up_sampling_goal = 1000 / sampling_rate_mhz / bin_size_ns
-    if abs(np.mod(np.log(up_sampling_goal) /np.log(2), 1)) > .01:
-        raise ValueError('the number of time bins in a sample must ' +
-                         'be a power of 2')
-    else:
-        up_sampling_goal = int(up_sampling_goal)
-    filter_str = 'filters'
-    current_upsampling = 1
-    for layer_index in range(n_conv):
-        model.add(
-            tf.keras.layers.Conv1D(
-                filters=filter_layers[layer_index],
-                kernel_size=kernel_layers[layer_index], strides=1,
-                padding=padding, name="conv" + str(layer_index),
-            )
-        )
-        model.add(
-            tf.keras.layers.ReLU(
-                negative_slope=.001,
-                max_value=None,
-            )
-        )
-        if current_upsampling < up_sampling_goal:
-            current_upsampling *= 2
-            model.add(
-                tf.keras.layers.UpSampling1D(size=2)
-                # tf.keras.layers.Reshape([current_upsampling*n_sample,int(filter_layers[layer_index]/2)])
-            )
-        filter_str += '-' + str(filter_layers[layer_index]) + 'x' + \
-                      str(kernel_layers[layer_index])
-    # model.add(
-    #     tf.keras.layers.Conv1D(
-    #         filters=1, kernel_size=1, strides=1,
-    #         padding=padding, name="conv_featurewise",
-    #         activation="relu",
-    #         bias_initializer = tf.keras.initializers.Constant(
-    #             value=-0.1
-    #         )
-    #     )
-    # )
-    # filter_str += '-1x1'
-    model.add(tf.keras.layers.Flatten())
-    model.add(
+        tf.keras.layers.Conv1D(
+            filters=n_filer1, kernel_size=kernel_size, strides=1,
+            padding=padding, name="conv1",
+            activation="relu"
+        ),
+        tf.keras.layers.Conv1D(
+            filters=n_filer2, kernel_size=kernel_size, strides=1,
+            padding=padding, name="conv2",
+            activation="relu"
+        ),
+        tf.keras.layers.Conv1D(
+            filters=n_filer3, kernel_size=kernel_size, strides=1,
+            padding=padding, name="conv3",
+            activation="relu"
+        ),
+        tf.keras.layers.Reshape([n_sample * n_filer3, 1], name="reshape"),
+        tf.keras.layers.ZeroPadding1D(4),
+        tf.keras.layers.LocallyConnected1D(1, 9, name="LC"),
+        # tf.keras.layers.Dense(units=n_bin, name="dense"),
+        tf.keras.layers.Flatten(),
         tf.keras.layers.ReLU(
             negative_slope=0, threshold=0, trainable=False
         )
-    )
+    ])
     # model compilation
     model.compile(
         optimizer=tf.keras.optimizers.Adam(lr),
@@ -226,16 +201,15 @@ def train_cnn():
         n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
-        sigma_smooth_pe_ns=sigma_smooth_pe_ns, baseline=baseline,
-        relative_gain_std=relative_gain_std
+        sigma_smooth_pe_ns=sigma_smooth_pe_ns, baseline=baseline
     )
 
     # training
     run = 0
-    run_name = 'deconv_' + filter_str + \
-               '_lr' + str(lr) + '_rel_gain_std' + str(relative_gain_std)
+    run_name = 'conv_filter' + str(n_filer1) + str(n_filer2) + str(n_filer3) + \
+               '_kernel' + str(kernel_size) + '_lr' + str(lr)
     # run_name += '_dense'
-    run_name += '_pos'
+    run_name += '_LCpos'
     if np.size(pe_rate_mhz) > 1:
         run_name += '_rate' + str(pe_rate_mhz[0]) + '-' + \
                     str(pe_rate_mhz[1])
@@ -248,14 +222,8 @@ def train_cnn():
                     str(noise_lsb[1])
     else:
         run_name += '_noise' + str(noise_lsb)
-    if np.size(baseline) > 1:
-        run_name += '_baseline' + str(baseline[0]) + '-' + \
-                    str(baseline[1])
-    else:
-        run_name += '_baseline' + str(baseline)
     while os.path.exists('./Graph/' + run_name + '_run' + str(run)):
         run += 1
-
     tbCallBack = tf.keras.callbacks.TensorBoard(
         log_dir='./Graph/' + run_name + '_run' + str(run),
         batch_size=batch_size
@@ -278,10 +246,8 @@ def continue_train_cnn(run_name):
     bin_size_ns = 0.5
     sampling_rate_mhz = 250
     amplitude_gain = 5.
-    noise_lsb = 0, 2  # 1.05
-    sigma_smooth_pe_ns = 2.
-    baseline = 0
-    relative_gain_std = 0.1
+    noise_lsb = 0  # 1.05
+    sigma_smooth_pe_ns = 0.5
 
     # training parameters
     steps_per_epoch = 1e2  # 1 step feed a batch of events
@@ -303,12 +269,11 @@ def continue_train_cnn(run_name):
     )
     # data generation for training
     generator = generator_nsb(
-        n_event=1, batch_size=batch_size, n_sample=n_sample + n_sample_init,
+        n_event=None, batch_size=batch_size, n_sample=n_sample + n_sample_init,
         n_sample_init=n_sample_init, pe_rate_mhz=pe_rate_mhz,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
-        sigma_smooth_pe_ns=sigma_smooth_pe_ns, baseline=baseline,
-        relative_gain_std=relative_gain_std
+        sigma_smooth_pe_ns=sigma_smooth_pe_ns
     )
     # training
     model.fit_generator(
@@ -322,5 +287,5 @@ def continue_train_cnn(run_name):
 
 
 if __name__ == '__main__':
-    # train_cnn()
-    continue_train_cnn('deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth1.0_noise0.5-1.5_baseline0_run0')
+    train_cnn()
+    # continue_train_cnn('conv_filter488_kernel10_lr0.001_LC_rate0-200_smooth1_run2r')

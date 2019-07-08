@@ -1,8 +1,8 @@
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
-from toy import generator_nsb, generator_flash, generator_andrii_toy
-from train_cnn import loss_all, loss_cumulative, loss_chi2, loss_continuity, \
+from pe_extractor.toy import generator_nsb, generator_flash, generator_andrii_toy
+from pe_extractor.train_cnn import loss_all, loss_cumulative, loss_chi2, loss_continuity, \
     timebin_from_prediction
 import tensorflow as tf
 import os

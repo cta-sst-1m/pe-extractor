@@ -1,11 +1,11 @@
 import sys
 import gc
-from toy import generator_nsb, gauss_kernel, model_predict, read_experimental
+from pe_extractor.toy import generator_nsb, gauss_kernel, model_predict, read_experimental
 import numpy as np
 #from matplotlib import use as mpl_use
 #mpl_use('Agg')
 from matplotlib import pyplot as plt
-from train_cnn import loss_all, loss_cumulative, loss_chi2, \
+from pe_extractor.train_cnn import loss_all, loss_cumulative, loss_chi2, \
     loss_continuity
 from astropy.stats import sigma_clip
 
@@ -283,9 +283,13 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
         del model
     if g2_file is not None:
         np.savez(
-            g2_file,
-            n_sample_wf, sum12_wf, sum1_wf, sum2_wf,
-            n_sample_pb, sum12_pb, sum1_pb, sum2_pb
+            g2_file, shift_in_sample=shift_in_sample,
+            n_sample_wf=n_sample_wf, sum12_wf=sum12_wf, sum1_wf=sum1_wf,
+            sum2_wf=sum2_wf, n_sample_pb=n_sample_pb, sum12_pb=sum12_pb,
+            sum1_pb=sum1_pb, sum2_pb=sum2_pb,
+            peak_max_wf=peak_max_wf, mean_g2_wf=mean_g2_wf,
+            std_g2_wf=std_g2_wf, peak_max_pb=peak_max_pb, mean_g2_pb=mean_g2_pb,
+            std_g2_pb=std_g2_pb, n_waveform_steps=n_waveform_steps
         )
     g2_pix12_wf = n_sample_wf * sum12_wf / (sum1_wf * sum2_wf)
     if run_name is not None:
