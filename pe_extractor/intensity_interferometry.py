@@ -413,7 +413,7 @@ def plot_g2_toy(
 
 
 def get_stat_g2(g2):
-    filtered = sigma_clip(g2, sigma=3, iters=10)
+    filtered = sigma_clip(g2, sigma=3, maxiters=10)
     mask_in_baseline = ~filtered.mask
     baseline_data = g2[mask_in_baseline]
     mean_g2 = np.mean(baseline_data)
