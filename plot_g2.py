@@ -47,20 +47,13 @@ def convert_int(text):
         return int(text)
 
 
-def convert_str(text):
-    if text is None or text.lower() == 'none':
-        return None
-    else:
-        return text
-
-
 if __name__ == '__main__':
     args = docopt(__doc__)
     file_data = args['<INPUT>']
     file_off = args['--file_off']
     max_events = convert_int(args['--max_events'])
     output_file = args['--output_file']
-    model = convert_str(args['--model'])
+    model = args['--model']
     shift_in_sample = convert_list_int(args['--shift_in_sample'])
     plot_g2_exp(
         file_data, file_off, run_name=model, shift_in_sample=shift_in_sample,
