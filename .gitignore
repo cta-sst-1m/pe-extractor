@@ -4,3 +4,6 @@ plots/
 oldGraph/
 .idea/
 Graph/
+*.png
+*.o
+*.list

@@ -52,12 +52,13 @@ def memory_debug(variables, str):
 
 
 def calculate_correlation(
-        batch_signal1, batch_signal2, shift_in_bins=range(-100, 101),
-                 n_sample_max=5000000
+        batch_signal1, batch_signal2, shift_in_bins=range(-100, 101)
 ):
     sum1 = np.zeros(len(shift_in_bins))
     sum2 = np.zeros(len(shift_in_bins))
     sum12 = np.zeros(len(shift_in_bins))
+    sum11 = np.zeros(len(shift_in_bins))
+    sum22 = np.zeros(len(shift_in_bins))
     n_sample = np.zeros(len(shift_in_bins), dtype=int)
     n_event, n_sample_batch = batch_signal1.shape
     if np.max(np.abs(shift_in_bins)) >= n_sample_batch:
@@ -67,32 +68,32 @@ def calculate_correlation(
         )
     for b, bin_diff in enumerate(shift_in_bins):
         if bin_diff == 0:
-            signal1_shifted = batch_signal1.flatten()
-            signal2_shifted = batch_signal2.flatten()
+            signal1_shifted = batch_signal1
+            signal2_shifted = batch_signal2
         elif bin_diff > 0:
-            signal1_shifted = batch_signal1[:, bin_diff:].flatten()
-            signal2_shifted = batch_signal2[:, :-bin_diff].flatten()
+            signal1_shifted = batch_signal1[:, bin_diff:]
+            signal2_shifted = batch_signal2[:, :-bin_diff]
         else:  # bin_diff < 0
-            signal1_shifted = batch_signal1[:, :bin_diff].flatten()
-            signal2_shifted = batch_signal2[:, -bin_diff:].flatten()
-        n_sample[b] = signal1_shifted.size
-        for sample_start in range(0, n_sample[b], n_sample_max):
-            sample_stop = sample_start + n_sample_max
-            if sample_stop > n_sample[b]:
-                sample_stop = n_sample[b]
-            s1 = signal1_shifted[sample_start:sample_stop]
-            s2 = signal2_shifted[sample_start:sample_stop]
-            sum1[b] += np.sum(s1)
-            sum2[b] += np.sum(s2)
-            sum12[b] += np.sum(s1 * s2)
-    return sum12, sum1, sum2, n_sample
+            signal1_shifted = batch_signal1[:, :bin_diff]
+            signal2_shifted = batch_signal2[:, -bin_diff:]
+        mask = np.logical_and(
+            np.isfinite(signal1_shifted),
+            np.isfinite(signal2_shifted)
+        )
+        n_sample[b] = np.sum(mask)
+        s1_finite = signal1_shifted[mask]
+        s2_finite = signal2_shifted[mask]
+        sum1[b] = np.sum(s1_finite)
+        sum2[b] = np.sum(s2_finite)
+        sum12[b] = np.sum(s1_finite * s2_finite)
+        sum11[b] = np.sum(s1_finite ** 2)
+        sum22[b] = np.sum(s2_finite ** 2)
+    return sum1, sum2, sum12, sum11, sum22, n_sample
 
 
-def calculate_g2(batch_signal1, batch_signal2, shift_in_bins,
-                 n_sample_max=5000000):
-    sum12, sum1, sum2, n_sample = calculate_correlation(
-        batch_signal1, batch_signal2, shift_in_bins=shift_in_bins,
-        n_sample_max=n_sample_max
+def calculate_g2(batch_signal1, batch_signal2, shift_in_bins):
+    sum1, sum2, sum12, sum11, sum22, n_sample = calculate_correlation(
+        batch_signal1, batch_signal2, shift_in_bins=shift_in_bins
     )
     g2 = n_sample * sum12 / (sum1 * sum2)
     return g2
@@ -156,10 +157,12 @@ def generator_coherent_pixels(
 
 def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
                 shift_in_sample=None, sampling_rate_mhz=250,
-                start=0, stop=None, step=None, skip_bins=56,
-                n_waveform_max=100, evolution_plot=None, g2_file=None):
+                start=0, stop=None, step=None, skip_bins=64,
+                n_waveform_max=100, g2_file=None, n_bin_per_sample=8
+):
     import ROOT
-
+    sample_length_ns = 1000. / sampling_rate_mhz
+    bin_length_ns = sample_length_ns / n_bin_per_sample
     f = ROOT.TFile(rootfile_data)
     n_waveform_files = f.waveforms.GetEntries()
     f.Close()
@@ -170,8 +173,8 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
     if stop is None or stop > n_waveform_files:
         stop = n_waveform_files
     print('reading HV off data ...')
-    wf0_hvoff, wf1_hvoff, _ = read_experimental(
-        rootfile_hvoff, start=0, stop=10000, step=step
+    wf0_hvoff, wf1_hvoff, _, _= read_experimental(
+        rootfile_hvoff, start=0, stop=1000, step=step
     )
     baseline_pix0 = np.nanmean(
         get_baseline(wf0_hvoff, margin_lsb=5, samples_around=4)
@@ -192,27 +195,23 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
     del wf0_hvoff
     del wf1_hvoff
     print('reading data (', stop-start, '/', n_waveform_files, 'waveforms)...')
-    sum12_wf = np.zeros_like(shift_in_sample, dtype=float)
     sum1_wf = np.zeros_like(shift_in_sample, dtype=float)
     sum2_wf = np.zeros_like(shift_in_sample, dtype=float)
+    sum12_wf = np.zeros_like(shift_in_sample, dtype=float)
+    sum11_wf = np.zeros_like(shift_in_sample, dtype=float)
+    sum22_wf = np.zeros_like(shift_in_sample, dtype=float)
     n_sample_wf = np.zeros_like(shift_in_sample, dtype=int)
-    sum12_pb = np.zeros_like(shift_in_sample, dtype=float)
-    sum1_pb = np.zeros_like(shift_in_sample, dtype=float)
-    sum2_pb = np.zeros_like(shift_in_sample, dtype=float)
-    n_sample_pb = np.zeros_like(shift_in_sample, dtype=int)
-    peak_max_wf = []
-    mean_g2_wf = []
-    std_g2_wf = []
-    peak_max_pb = []
-    mean_g2_pb = []
-    std_g2_pb = []
-    n_waveform_steps = []
-    g2_pix12_proba = None
     if start:
         current_start = start
     else:
         current_start = 0
     model = None
+    sum1_pb = None
+    sum2_pb = None
+    sum12_pb = None
+    sum11_pb = None
+    sum22_pb = None
+    n_sample_pb = None
     if run_name is not None:
         import tensorflow as tf
         model = tf.keras.models.load_model(
@@ -222,14 +221,25 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
                 'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
             }
         )
+        shift_in_bins = shift_in_sample[:, None] * n_bin_per_sample + np.arange(-4, 4)[None, :]
+        shift_in_bins = shift_in_bins.flatten()
+        shift_bin_ns = shift_in_bins * bin_length_ns
+
+        sum1_pb = np.zeros_like(shift_in_bins, dtype=float)
+        sum2_pb = np.zeros_like(shift_in_bins, dtype=float)
+        sum12_pb = np.zeros_like(shift_in_bins,dtype=float)
+        sum11_pb = np.zeros_like(shift_in_bins, dtype=float)
+        sum22_pb = np.zeros_like(shift_in_bins, dtype=float)
+        n_sample_pb = np.zeros_like(shift_in_bins, dtype=int)
     n_waveform_tot = 0
+    shift_waveform_ns = shift_in_sample * sample_length_ns
     while True:
         current_stop = current_start + n_waveform_max
         if stop is not None and current_stop > stop:
             current_stop = stop
         if current_stop == current_start:
             break
-        wf0, wf1, t = read_experimental(
+        wf0, wf1, t, _ = read_experimental(
             rootfile_data, start=current_start, stop=current_stop, step=step
         )
         n_waveform, n_sample = wf0.shape
@@ -240,43 +250,34 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
         wf1 = wf1 - baseline_pix1
         print('calculating g2 on waveforms', current_start, 'to',
               current_stop - 1 , 'with', n_sample, 'samples...')
-        sum12, sum1, sum2, n_samp = calculate_correlation(
-            wf0.reshape([1, -1]),
-            wf1.reshape([1, -1]),
+        sum1, sum2, sum12, sum11, sum22, n_samp = calculate_correlation(
+            wf0,
+            wf1,
             shift_in_bins=shift_in_sample
         )
-        sum12_wf += sum12
         sum1_wf += sum1
         sum2_wf += sum2
+        sum12_wf += sum12
+        sum11_wf += sum11
+        sum22_wf += sum22
         n_sample_wf += n_samp
-        g2_wf = n_sample_wf * sum12_wf / (sum1_wf * sum2_wf)
-        peak_max, mean_g2, std_g2, _ = get_stat_g2(g2_wf)
-        peak_max_wf.append(peak_max)
-        mean_g2_wf.append(mean_g2)
-        std_g2_wf.append(std_g2)
-        n_waveform_steps.append(n_waveform_tot)
-        sample_length_ns = 1000. / sampling_rate_mhz
-        shift_waveform_ns = shift_in_sample * sample_length_ns
         if model is not None:
             # print('calculating proba for 1st pixel with model', run_name)
-            proba0 = model_predict(model, wf0, skip_bins=skip_bins)[:, skip_bins::8]
+            proba0 = model_predict(model, wf0, skip_bins=skip_bins)
             # print('calculating proba for 2nd pixel with model', run_name)
-            proba1 = model_predict(model, wf1, skip_bins=skip_bins)[:, skip_bins::8]
+            proba1 = model_predict(model, wf1, skip_bins=skip_bins)
             # print('calculating g2 on proba ...')
-            sum12, sum1, sum2, n_samp = calculate_correlation(
-                proba0.reshape([1, -1]),
-                proba1.reshape([1, -1]),
-                shift_in_bins=shift_in_sample
+            sum1, sum2, sum12, sum11, sum22, n_samp = calculate_correlation(
+                proba0,
+                proba1,
+                shift_in_bins=shift_in_bins
             )
-            sum12_pb += sum12
             sum1_pb += sum1
             sum2_pb += sum2
+            sum12_pb += sum12
+            sum11_pb += sum11
+            sum22_pb += sum22
             n_sample_pb += n_samp
-            g2_pb = n_sample_pb * sum12_pb / (sum1_pb * sum2_pb)
-            peak_max, mean_g2, std_g2, _ = get_stat_g2(g2_pb)
-            peak_max_pb.append(peak_max)
-            mean_g2_pb.append(mean_g2)
-            std_g2_pb.append(std_g2)
         current_start = current_stop  # prepare for next iteration
 
     if model is not None:
@@ -284,25 +285,35 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
     if g2_file is not None:
         np.savez(
             g2_file, shift_in_sample=shift_in_sample,
-            n_sample_wf=n_sample_wf, sum12_wf=sum12_wf, sum1_wf=sum1_wf,
-            sum2_wf=sum2_wf, n_sample_pb=n_sample_pb, sum12_pb=sum12_pb,
-            sum1_pb=sum1_pb, sum2_pb=sum2_pb,
-            peak_max_wf=peak_max_wf, mean_g2_wf=mean_g2_wf,
-            std_g2_wf=std_g2_wf, peak_max_pb=peak_max_pb, mean_g2_pb=mean_g2_pb,
-            std_g2_pb=std_g2_pb, n_waveform_steps=n_waveform_steps
+            n_sample_wf=n_sample_wf, sum1_wf=sum1_wf, sum2_wf=sum2_wf,
+            sum12_wf=sum12_wf, sum11_wf=sum11_wf, sum22_wf=sum22_wf,
+            shift_in_bins=shift_in_bins,
+            n_sample_pb=n_sample_pb, sum1_pb=sum1_pb, sum2_pb=sum2_pb,
+            sum12_pb=sum12_pb, sum11_pb=sum11_pb, sum22_pb=sum22_pb,
+            baseline_pix0=baseline_pix0, baseline_pix1=baseline_pix1,
+            e_noise_pix0=e_noise_pix0, e_noise_pix1=e_noise_pix1
         )
-    g2_pix12_wf = n_sample_wf * sum12_wf / (sum1_wf * sum2_wf)
-    if run_name is not None:
-        g2_pix12_proba = n_sample_pb * sum12_pb / (sum1_pb * sum2_pb)
-    print('plotting ...')
+    # g2_pix12_wf = n_sample_wf * sum12_wf / (sum1_wf * sum2_wf)
+    # g2_pix11_wf = n_sample_wf * sum11_wf / (sum1_wf ** 2)
+    # g2_pix22_wf = n_sample_wf * sum22_wf / (sum2_wf ** 2)
+
+    g2_wf = n_sample_wf * sum12_wf / (sum1_wf * sum2_wf)
     title_str = '{} waveforms, {} samples @ {} MHz ({:.2g} s)'.format(
         n_waveform_tot, n_sample, sampling_rate_mhz,
         n_waveform_tot * n_sample * 1e-9 * sample_length_ns
     )
-    title_str += '\nproba from model: {}'.format(run_name[:30])
+    g2_proba = None
+    if run_name is not None:
+        #g2_proba = n_sample_pb * (sum11_pb + sum22_pb + 2 * sum12_pb) / ((sum1_pb + sum2_pb) ** 2)
+        g2_proba = n_sample_pb * sum12_pb / (sum1_pb * sum2_pb)
+        title_str += '\nproba from model: {}'.format(run_name[:30])
+
+    print('plotting ...')
+
     fig, axes = plot_calculated_g2(
-        shift_wf_ns=shift_waveform_ns, g2_pix12_wf=g2_pix12_wf,
-        shift_proba_ns=shift_waveform_ns, g2_pix12_proba=g2_pix12_proba,
+        shift_pe_ns=None, g2_pix12_pe=None,
+        shift_wf_ns=shift_waveform_ns, g2_pix12_wf=g2_wf,
+        shift_proba_ns=shift_bin_ns, g2_pix12_proba=g2_proba,
         title_str=title_str
     )
     if g2_plot is None:
@@ -310,23 +321,6 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
     else:
         plt.savefig(g2_plot)
         print(g2_plot, 'created')
-    plt.close(fig)
-
-    fig, ax = plt.subplots(1, 1, figsize=(8,6))
-    ampl_peak_wf = np.array(peak_max_wf) - np.array(mean_g2_wf)
-    ampl_peak_pb = np.array(peak_max_pb) - np.array(mean_g2_pb)
-    ax.semilogx(n_waveform_steps, ampl_peak_wf, 'b-', label='$g^2_{wf}(0)$')
-    ax.plot(n_waveform_steps, std_g2_wf, 'b--', label='$\sigma_{g^2_{wf}}$')
-    ax.plot(n_waveform_steps, ampl_peak_pb, 'r-', label='$g^2_{P}(0)$')
-    ax.plot(n_waveform_steps, std_g2_pb, 'r--', label='$\sigma_{g^2_{P}}$')
-    ax.set_xlabel('# of waveforms analysed')
-    ax.grid()
-    ax.legend()
-    if evolution_plot is None:
-        plt.show()
-    else:
-        plt.savefig(evolution_plot)
-        print(evolution_plot, 'created')
     plt.close(fig)
 
 
@@ -396,12 +390,12 @@ def plot_g2_toy(
     g2_pix12_proba = calculate_g2(
         proba_pix1, proba_pix2, shift_in_bins=shift_in_bins
     )
-    shift_bins_ns = shift_in_bins * bin_size_ns
+    shift_samples_ns = shift_in_bins * bin_size_ns
     shift_waveform_ns = shift_in_sample * sample_length_ns
     fig, axes = plot_calculated_g2(
-        shift_pe_ns=shift_bins_ns, g2_pix12_pe=g2_pix12_pe,
-        shift_wf_ns=shift_bins_ns, g2_pix12_wf=g2_pix12_wf,
-        shift_proba_ns=shift_bins_ns, g2_pix12_proba=g2_pix12_proba,
+        shift_pe_ns=shift_samples_ns, g2_pix12_pe=g2_pix12_pe,
+        shift_wf_ns=shift_samples_ns, g2_pix12_wf=g2_pix12_wf,
+        shift_proba_ns=shift_samples_ns, g2_pix12_proba=g2_pix12_proba,
         title_str=title_str
     )
     if filename is None:
@@ -419,87 +413,95 @@ def get_stat_g2(g2):
     mean_g2 = np.mean(baseline_data)
     std_g2 = np.std(baseline_data)
     if np.all(mask_in_baseline):
-        peak_max = np.NaN
+        peak_max = 0
+        peak_pos = 0
     else:
-        peak_data = g2[~mask_in_baseline]
-        peak_max = np.max(peak_data)
-    return peak_max, mean_g2, std_g2, mask_in_baseline
+        peak_data = np.zeros_like(g2)
+        peak_data[~mask_in_baseline] = g2[~mask_in_baseline]
+        peak_pos = np.argmax(peak_data)
+        peak_max = peak_data[peak_pos]
+    return peak_max, mean_g2, std_g2, mask_in_baseline, peak_pos
 
 
 def plot_calculated_g2(
         shift_pe_ns=None, g2_pix12_pe=None,
         shift_wf_ns=None, g2_pix12_wf=None,
         shift_proba_ns=None, g2_pix12_proba=None,
-        title_str=None
+        title_str=None, ax=None
 ):
-    fig, axes = plt.subplots(1, 1, figsize=(8, 6), sharex=True, squeeze=False)
-    axes = axes[:, 0]
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+    else:
+        fig = ax.get_figure()
     if title_str is not None:
-        axes[0].set_title(title_str)
+        ax.set_title(title_str)
     if g2_pix12_pe is not None:
-        peak_max_pe, mean_g2_pe, std_g2_pe, mask_pe = get_stat_g2(
+        peak_max_pe, mean_g2_pe, std_g2_pe, mask_pe, peak_pos_pe = get_stat_g2(
             g2_pix12_pe)
         g2_ampl_pe = peak_max_pe - mean_g2_pe
-        label_pe = '$g^2_{pe_1, pe_2} , g^2(\delta t=0)=' + \
-                   '{:.3e}'.format(g2_ampl_pe) + ' \pm ' + \
-                   '{:.3e}'.format(std_g2_pe) + '$'
-        axes[0].plot(
+        label_pe = '$g^2_{pe_1, pe_2} , g^2(\delta t=' + \
+                   '{}'.format(shift_pe_ns[peak_pos_pe]) + ')=' + \
+                   '{:.1e}'.format(g2_ampl_pe) + ' \pm ' + \
+                   '{:.0e}'.format(std_g2_pe) + '$'
+        ax.plot(
             shift_pe_ns, g2_pix12_pe - mean_g2_pe, 'g-',label=label_pe
         )
-        axes[0].plot(
+        ax.plot(
             shift_pe_ns[mask_pe], g2_pix12_pe[mask_pe] - mean_g2_pe, 'g.',
             label=None
         )
-        axes[0].plot(
+        ax.plot(
             shift_pe_ns[~mask_pe], g2_pix12_pe[~mask_pe] - mean_g2_pe, 'g+',
             label=None
         )
-    if g2_pix12_wf is not None:
-        peak_max_wf, mean_g2_wf, std_g2_wf, mask_wf = get_stat_g2(
-            g2_pix12_wf)
-        g2_ampl_wf = peak_max_wf - mean_g2_wf
-        label_wf = '$g^2_{wf_1, wf_2} , g^2(\delta t=0)=' + \
-                   '{:.3e}'.format(g2_ampl_wf) + ' \pm ' + \
-                   '{:.3e}'.format(std_g2_wf) + '$'
-        axes[0].plot(
-            shift_wf_ns, g2_pix12_wf - mean_g2_wf, 'b-',label=label_wf
-        )
-        axes[0].plot(
-            shift_wf_ns[mask_wf], g2_pix12_wf[mask_wf] - mean_g2_wf, 'b.',
-            label=None
-        )
-        axes[0].plot(
-            shift_wf_ns[~mask_wf], g2_pix12_wf[~mask_wf] - mean_g2_wf, 'b+',
-            label=None
-        )
     if g2_pix12_proba is not None:
-        peak_max_pb, mean_g2_pb, std_g2_pb, mask_pb = get_stat_g2(
+        peak_max_pb, mean_g2_pb, std_g2_pb, mask_pb, peak_pos_pb = get_stat_g2(
             g2_pix12_proba)
         g2_ampl_pb = peak_max_pb - mean_g2_pb
-        label_pb = '$g^2_{P_1, P_2} , g^2(\delta t=0)=' + \
+        label_pb = '$g^2_{P_1, P_2} , g^2(\delta t=' + \
+                   '{}'.format(shift_proba_ns[peak_pos_pb]) + ')=' + \
                    '{:.3e}'.format(g2_ampl_pb) + ' \pm ' + \
                    '{:.3e}'.format(std_g2_pb) + '$'
-        axes[0].plot(
+        ax.plot(
             shift_proba_ns, g2_pix12_proba - mean_g2_pb, 'r-', label=label_pb)
-        axes[0].plot(
+        ax.plot(
             shift_proba_ns[mask_pb],
             g2_pix12_proba[mask_pb] - mean_g2_pb,
             'r.',
             label=None
         )
-        axes[0].plot(
+        ax.plot(
             shift_proba_ns[~mask_pb],
             g2_pix12_proba[~mask_pb] - mean_g2_pb,
             'r+',
             label=None
         )
+    if g2_pix12_wf is not None:
+        peak_max_wf, mean_g2_wf, std_g2_wf, mask_wf, peak_pos_wf = get_stat_g2(
+            g2_pix12_wf)
+        g2_ampl_wf = peak_max_wf - mean_g2_wf
+        label_wf = '$g^2_{wf_1, wf_2} , g^2(\delta t=' + \
+                   '{}'.format(shift_wf_ns[peak_pos_wf]) + ')=' + \
+                   '{:.1e}'.format(g2_ampl_wf) + ' \pm ' + \
+                   '{:.0e}'.format(std_g2_wf) + '$'
+        ax.plot(
+            shift_wf_ns, g2_pix12_wf - mean_g2_wf, 'b-',label=label_wf
+        )
+        ax.plot(
+            shift_wf_ns[mask_wf], g2_pix12_wf[mask_wf] - mean_g2_wf, 'b.',
+            label=None
+        )
+        ax.plot(
+            shift_wf_ns[~mask_wf], g2_pix12_wf[~mask_wf] - mean_g2_wf, 'b+',
+            label=None
+        )
 
-    axes[0].grid(True)
-    axes[0].set_xlabel('shift [ns]')
-    axes[0].set_ylabel('$g^2 - <g^2_{baseline}>$')
-    axes[0].legend()
+    ax.grid(True)
+    ax.set_xlabel('shift [ns]')
+    ax.set_ylabel('$g^2 - <g^2_{baseline}>$')
+    ax.legend()
     plt.tight_layout()
-    return fig, axes
+    return fig, ax
 
 
 def test_correlated_generator(n_pixel=2):
@@ -582,7 +584,7 @@ def plot_baseline(rootfile_data, sampling_rate_mhz=250, n_event_max=None,
             stop = n_event_max
         if stop - start > max_batch:
             stop = start + max_batch
-        wf0, wf1, t = read_experimental(
+        wf0, wf1, t, _ = read_experimental(
             rootfile_data, start=start, stop=stop
         )
         baseline_wf0 = get_baseline(wf0, margin_lsb=margin_lsb,
@@ -609,7 +611,7 @@ def plot_baseline(rootfile_data, sampling_rate_mhz=250, n_event_max=None,
 
 
 def plot_baseline_points(rootfile_data, sampling_rate_mhz=250, n_event_max=None):
-    wf0, wf1, t = read_experimental(
+    wf0, wf1, t, _ = read_experimental(
         rootfile_data, start=0, stop=n_event_max
     )
     t0, baseline_wf0 = get_baseline_points(wf0, margin_lsb=8, samples_around=4,
@@ -628,9 +630,7 @@ def plot_baseline_points(rootfile_data, sampling_rate_mhz=250, n_event_max=None)
 
 
 if __name__ == '__main__':
-    # import tensorflow as tf
 
-    # tf.enable_eager_execution()
     # files_20190520 = [
     #     'experimental_waveforms/SST1M_01_20190520_0010_0014.root',
     #     'experimental_waveforms/SST1M_01_20190520_0015_0019.root',
@@ -642,36 +642,66 @@ if __name__ == '__main__':
     #     run_name='cnn-example', filename='exp_20190520_0010-0014.png',
     #     shift_in_sample=np.arange(-50, 50)
     # )
-    n_events = None
-    files_hvoff = 'experimental_waveforms/SST1M_01_20190523_0000_0003_raw_waveforms.root'
-    files_pp = 'experimental_waveforms/SST1M01_20190625_0000_0000_raw_waveforms.root'
-    files_sp = 'experimental_waveforms/SST1M01_20190625_0013_0013_raw_waveforms.root'
-    files_lampoff = 'experimental_waveforms/SST1M01_20190625_0026_0026_raw_waveforms.root'
-    log_shift = np.unique(np.logspace(3, 7, 50, dtype=int))
-    shift_in_sample = np.sort(np.hstack([-log_shift, 0 , log_shift]))
+    n_events = 5000
+    # June 2019 data
+    # files_pp = 'experimental_waveforms/SST1M01_20190625_0000_0000_raw_waveforms.root'
+    # files_sp = 'experimental_waveforms/SST1M01_20190625_0013_0013_raw_waveforms.root'
+    #files_lampoff = 'experimental_waveforms/SST1M01_20190625_0026_0026_raw_waveforms.root'
+
+    # May 2019 data
+    #files_hvoff = 'experimental_waveforms/SST1M_01_20190523_0000_0000_raw_waveforms.root'
+    #files_pp = 'experimental_waveforms/SST1M_01_20190523_0004_0008_raw_waveforms.root'
+    #files_sp = 'experimental_waveforms/SST1M_01_20190523_0104_0108_raw_waveforms.root'
+
+    # September 17 data
+    files_lampoff = 'experimental_waveforms/SST1M_01_20190917_0007_0007_raw_waveforms.root'
+    files_pp = 'experimental_waveforms/SST1M_01_20190917_0295_0295_raw_waveforms.root'
+    files_sp = 'experimental_waveforms/SST1M_01_20190917_0194_0194_raw_waveforms.root'
+
+    #log_shift = np.unique(np.logspace(3, 7, 50, dtype=int))
+    #shift_in_sample = np.sort(np.hstack([-log_shift, 0, log_shift]))
     #shift_in_sample = np.linspace(-5e6, 5e6, 200, dtype=int)
-    shift_in_sample = np.linspace(-1e2, 1e2, 200, dtype=int)
+    shift_in_sample = range(-125, 126)
 
     # plot_baseline(files_pp, n_event_max=n_events, margin_lsb=10, samples_around=2)
     # model = 'deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth2.0_noise0-2_baseline0_run0rr'
-    model = 'cnn-example'
+    # model = 'cnn-example'
+    model = 'C16x16_U2_C32x16_U2_C64x8_U2_C128x8_C64x4_C32x4_C16x2_C4x2_C1x1_C1x1_ns0.1_shift64_all1-50-10lr0.0002smooth1_amsgrad_run0'
+
+    if model is None:
+        g2_plot = 'plots/g2_off_' + str(n_events) + '.png'
+    else:
+        g2_plot = 'plots/' + model + '/g2_off_' + str(n_events) + '.png'
     plot_g2_exp(
-        files_pp, files_lampoff,
-        run_name=model,
-        evolution_plot='plots/' + model + '/g2_evol_pp.png',
-        g2_plot='plots/' + model + '/g2_short_pp_' + str(n_events) + 'wf.png',
-        shift_in_sample=shift_in_sample,
-        start=0, stop=n_events, step=None, skip_bins=56,
-        g2_file=files_pp.replace('raw_waveforms.root', 'g2.npz')
+        files_lampoff, files_lampoff, run_name=model,
+        g2_plot=g2_plot, shift_in_sample=shift_in_sample,
+        start=0, stop=n_events, step=None, skip_bins=64,
+        g2_file=g2_plot.replace('.png', '.npz')
     )
+
+    if model is None:
+        g2_plot='plots/g2_pp_' + str(n_events) + '.png'
+    else:
+        g2_plot='plots/' + model + '/g2_pp_' + str(n_events) + '.png'
+    plot_g2_exp(
+        files_pp, files_lampoff, run_name=model,
+        g2_plot=g2_plot, shift_in_sample=shift_in_sample,
+        start=0, stop=n_events, step=None, skip_bins=64,
+        g2_file=g2_plot.replace('.png', '.npz'),
+    )
+
+    if model is None:
+        g2_plot='plots/g2_sp_' + str(n_events) + '.png'
+    else:
+        g2_plot='plots/' + model + '/g2_sp_' + str(n_events) + '.png'
     plot_g2_exp(
         files_sp, files_lampoff,
         run_name=model,
-        evolution_plot='plots/' + model + '/g2_evol_sp.png',
-        g2_plot='plots/' + model + '/g2_short_sp_' + str(n_events) + 'wf.png',
+        g2_plot=g2_plot,
         shift_in_sample=shift_in_sample,
-        start=0, stop=n_events, step=None, skip_bins=56,
-        g2_file = files_sp.replace('raw_waveforms.root', 'g2.npz')
+        start=0, stop=n_events, step=None, skip_bins=64,
+        g2_file=g2_plot.replace('.png', '.npz'),
     )
+
     #plots_g2('cnn-example')
     #test_correlated_generator()

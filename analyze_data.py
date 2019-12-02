@@ -8,6 +8,9 @@ Usage:
 Options:
   -h --help                   Show this screen.
   --file_off=FILE             File with data either hv off or in dark (for baseline determination).
+  --g2_plot=FILE              Name of the file where to plot g2. If set to "show",
+                              then the plot is shown instead of being saved.
+                              [Default: show]
   --max_events=N              Maximum number of events to analyze. If none,
                               the files are fully read. [Default: None]
   --output_file=OUTPUT        File where to store the results (arrays with one value for each
@@ -58,11 +61,12 @@ if __name__ == '__main__':
     args = docopt(__doc__)
     file_data = args['<INPUT>']
     file_off = args['--file_off']
+    g2_plot = args['--g2_plot']
     max_events = convert_int(args['--max_events'])
     output_file = args['--output_file']
     model = convert_str(args['--model'])
     shift_in_sample = convert_list_int(args['--shift_in_sample'])
     plot_g2_exp(
         file_data, file_off, run_name=model, shift_in_sample=shift_in_sample,
-        g2_file=output_file
+        g2_file=output_file, g2_plot=g2_plot
     )

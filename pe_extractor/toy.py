@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.interpolate import interp1d
+import os
 
 
 def n_pe_from_rate(pe_rate_mhz, n_bin=800, bin_size_ns=0.5):
@@ -91,12 +92,12 @@ def waveform_from_n_pe(
 def _get_batch_nsb(
         batch_size, n_sample, n_bin_per_sample, pe_rate_mhz, bin_size_ns,
         template_amplitude_bin, noise_lsb, n_sample_init, baseline, kernel=None,
-        relative_gain_std=0.1
+        relative_gain_std=0.1, shift_proba_bin=0, dtype=np.float32
 ):
     n_bin = n_sample * n_bin_per_sample
     n_bin_init = n_sample_init * n_bin_per_sample
     n_pe_batch = np.zeros([batch_size, n_bin - n_bin_init])
-    waveform_batch = np.zeros([batch_size, n_sample - n_sample_init])
+    waveform_batch = np.zeros([batch_size, n_sample - n_sample_init], dtype=dtype)
     if np.size(pe_rate_mhz) == 1:
         pe_rate_batch = np.ones(batch_size) * pe_rate_mhz
     elif np.size(pe_rate_mhz) == 2:
@@ -154,12 +155,18 @@ def _get_batch_nsb(
             n_pe_smooth = np.convolve(n_pe, kernel, 'same')
             n_pe_batch[b, :] = n_pe_smooth[n_bin_init:]
         waveform_batch[b, :] = waveform[n_sample_init:]
-    return waveform_batch, n_pe_batch
+    n_pe_batch = n_pe_batch.astype(dtype)
+    n_pe_batch_shifted = np.roll(n_pe_batch, shift_proba_bin, axis=1)
+    if shift_proba_bin > 0:
+        n_pe_batch_shifted[:, :shift_proba_bin] = 0
+    elif shift_proba_bin < 0:
+        n_pe_batch_shifted[:, shift_proba_bin:] = 0
+    return waveform_batch, n_pe_batch_shifted
 
 
 def _get_batch_flash(
                 batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
-                template_amplitude_bin, noise_lsb
+                template_amplitude_bin, noise_lsb, shift_proba_bin=0
 ):
     n_bin = n_sample * n_bin_per_sample
     n_pe_batch = np.zeros([batch_size, n_bin])
@@ -178,7 +185,12 @@ def _get_batch_flash(
             n_pe_batch[b, :], template_amplitude_bin,
             n_bin_per_sample=n_bin_per_sample, noise_lsb=noise_lsb_batch[b]
         )
-    return waveform_batch, n_pe_batch
+    n_pe_batch_shifted = np.roll(n_pe_batch, shift_proba_bin, axis=1)
+    if shift_proba_bin > 0:
+        n_pe_batch_shifted[:, :shift_proba_bin] = 0
+    elif shift_proba_bin < 0:
+        n_pe_batch_shifted[:, shift_proba_bin:] = 0
+    return waveform_batch, n_pe_batch_shifted
 
 
 def gauss_kernel(bin_size_ns, sigma_ns):
@@ -201,7 +213,7 @@ def gauss_kernel(bin_size_ns, sigma_ns):
 def generator_flash(
         n_event=None, batch_size=1, n_sample=90, bin_flash=80,
         n_pe_flash=(1, 100), bin_size_ns=0.5, sampling_rate_mhz=250,
-        amplitude_gain=5., noise_lsb=1.05
+        amplitude_gain=5., noise_lsb=1.05, shift_proba_bin=0
 ):
     """
     Generator returning for each iteration a batch of waveforms and a batch of
@@ -240,14 +252,14 @@ def generator_flash(
         while True:
             waveform_batch, n_pe_batch = _get_batch_flash(
                 batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
-                template_amplitude_bin, noise_lsb,
+                template_amplitude_bin, noise_lsb, shift_proba_bin=shift_proba_bin
             )
             yield (waveform_batch, n_pe_batch)
     else:
         for event in range(n_event):
             waveform_batch, n_pe_batch = _get_batch_flash(
                 batch_size, n_sample, bin_flash, n_pe_flash, n_bin_per_sample,
-                template_amplitude_bin, noise_lsb,
+                template_amplitude_bin, noise_lsb, shift_proba_bin=shift_proba_bin,
             )
             yield (waveform_batch, n_pe_batch)
 
@@ -256,7 +268,7 @@ def generator_nsb(
         n_event=None, batch_size=1, n_sample=90, n_sample_init=20,
         pe_rate_mhz=100, bin_size_ns=0.5, sampling_rate_mhz=250,
         amplitude_gain=5., noise_lsb=1.05, sigma_smooth_pe_ns=0.,
-        baseline=0, relative_gain_std=0.1
+        baseline=0, relative_gain_std=0.1, shift_proba_bin=0, dtype=np.float64
 ):
     """
     Generator returning for each iteration a batch of waveforms and a batch of
@@ -312,7 +324,8 @@ def generator_nsb(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
                 baseline, kernel=kernel,
-                relative_gain_std=relative_gain_std
+                relative_gain_std=relative_gain_std,
+                shift_proba_bin=shift_proba_bin, dtype=dtype
             )
             yield (waveform_batch, n_pe_batch)
     else:
@@ -321,13 +334,14 @@ def generator_nsb(
                 batch_size, n_sample, n_bin_per_sample, pe_rate_mhz,
                 bin_size_ns, template_amplitude_bin, noise_lsb, n_sample_init,
                 baseline, kernel=kernel,
-                relative_gain_std=relative_gain_std
+                relative_gain_std=relative_gain_std,
+                shift_proba_bin=shift_proba_bin, dtype=dtype
             )
             yield (waveform_batch, n_pe_batch)
 
 
 def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
-                  skip_bins=56):
+                  skip_bins=64):
     """
     Do model prediction, reshaping the input as needed to feed the model.
     :param model: tf.keras.model object
@@ -357,7 +371,7 @@ def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
     skip_sample = int(np.ceil(skip_bins / nbin_per_sample))
     if skip_sample * nbin_per_sample != skip_bins:
         skip_bins = skip_sample * nbin_per_sample
-        print('WARNING: skip_sample changed to', skip_bins,
+        print('WARNING: skip_bins changed to', skip_bins,
               'to have a correspoding integer number of samples')
     #print('nbin_per_sample:', nbin_per_sample)
     n_batch_input = big_input.shape[0]
@@ -379,7 +393,7 @@ def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
         n_sub_batch_input = sub_batch_input.shape[0]
         sub_batch_pred = np.zeros(
             [n_sub_batch_input, nbin_per_sample * n_sample_input]
-        )
+        ) * np.nan
         sample_start_points = range(
             0,
             n_sample_input,
@@ -416,14 +430,18 @@ def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
     return output
 
 
-def generator_andrii_toy(filename, batch_size=1, n_sample=90, n_bin_per_sample=8):
+def generator_andrii_toy(
+        filename, batch_size=1, n_sample=2500, n_bin_per_sample=8,
+        shift_proba_bin=0, baseline=0.
+):
     import ROOT
     import root_numpy
 
     f = ROOT.TFile.Open(filename)
     tree = f.Get("A")
+    n_waveform = tree.GetEntries()
     current_event = 0
-    while True:
+    while current_event + batch_size <= n_waveform:
         n_pe = np.stack(root_numpy.tree2array(
             tree, "Npe",
             start=current_event, stop=current_event+batch_size
@@ -438,7 +456,54 @@ def generator_andrii_toy(filename, batch_size=1, n_sample=90, n_bin_per_sample=8
             axis=1
         )
         current_event += batch_size
-        yield (waveform, n_pe_upsampled)
+        n_pe_batch_shifted = np.roll(n_pe_upsampled, shift_proba_bin, axis=1)
+        if shift_proba_bin > 0:
+            n_pe_batch_shifted[:, :shift_proba_bin] = 0
+        elif shift_proba_bin < 0:
+            n_pe_batch_shifted[:, shift_proba_bin:] = 0
+        yield (waveform - baseline, n_pe_batch_shifted)
+
+
+def get_baseline(waveforms, margin_lsb=8, samples_around=4):
+    min_wf = np.min(waveforms)
+    samples_ignored = waveforms > min_wf + margin_lsb
+    for k in range(-samples_around, samples_around+1):
+        samples_ignored = np.logical_or(
+            samples_ignored,
+            np.roll(samples_ignored, k, axis=1)
+        )
+    baseline = np.mean(waveforms[~samples_ignored])
+    return baseline
+
+
+def generator_andrii_toy_baselinesub(
+        filename, batch_size=1, n_sample=2500, n_bin_per_sample=8,
+        shift_proba_bin=0, n_wf_baseline=1000, margin_lsb=8, samples_around=4
+):
+    gen_baseline = generator_andrii_toy(
+        filename, batch_size=n_wf_baseline, n_sample=n_sample,
+        n_bin_per_sample=n_bin_per_sample, shift_proba_bin=shift_proba_bin
+    )
+    waveforms, _ = next(gen_baseline)
+    baseline = get_baseline(
+        waveforms, margin_lsb=margin_lsb, samples_around=samples_around
+    )
+    assert np.isfinite(baseline)
+    del waveforms
+    # import ROOT
+    # import root_numpy
+    #
+    # f = ROOT.TFile.Open(filename)
+    # tree = f.Get("A")
+    # baselines = root_numpy.tree2array(tree, "ElectronicBaseine")
+    # dc_baselines = root_numpy.tree2array(tree, "DC_Baseline")
+    # baseline = np.mean(baselines) + np.mean(dc_baselines)
+
+    return generator_andrii_toy(
+        filename, batch_size=batch_size, n_sample=n_sample,
+        n_bin_per_sample=n_bin_per_sample, shift_proba_bin=shift_proba_bin,
+        baseline=baseline
+    )
 
 
 def plot_example(
@@ -474,40 +539,49 @@ def plot_example(
 def _read_experimental(rootfile, start=None, stop=None, step=None):
     import root_numpy
 
+    if not os.path.isfile(rootfile):
+        raise ValueError(rootfile + "does not exists.")
     wf0 = root_numpy.root2array(rootfile, "waveforms", "wf1",
                                 start=start, stop=stop, step=step)
     wf1 = root_numpy.root2array(rootfile, "waveforms", "wf2",
                                 start=start, stop=stop, step=step)
     t = None
+    event_number = root_numpy.root2array(rootfile, "waveforms", "event_number",
+                                         start=start, stop=stop, step=step)
     try:
-        t = root_numpy.root2array(rootfile, "waveforms", "time",
+        t_s = root_numpy.root2array(rootfile, "waveforms", "time_s",
                                     start=start, stop=stop, step=step)
+        t_ns = root_numpy.root2array(rootfile, "waveforms", "time_ns",
+                                     start=start, stop=stop, step=step)
+        t = t_s.astype('datetime64[s]') + t_ns.astype('timedelta64[ns]')
     except ValueError:
         pass
-    return wf0, wf1, t
+    return wf0, wf1, t, event_number
 
 
 def read_experimental(rootfiles, start=None, stop=None, step=None):
     if isinstance(rootfiles, str):
-        wf0, wf1, t = _read_experimental(
+        wf0, wf1, t, event_number = _read_experimental(
             rootfiles, start=start, stop=stop, step=step
         )
         if wf0.ndim == 1 or wf1.ndim == 1:
             wf0 = wf0.reshape([1, -1])
             wf1 = wf1.reshape([1, -1])
-        return wf0, wf1, t
+        return wf0, wf1, t, event_number
     else:
         wf0_list = []
         wf1_list = []
         t_list = []
+        event_number_list = []
         for rootfile in rootfiles:
-            wf0, wf1, t = _read_experimental(
+            wf0, wf1, t, event_number = _read_experimental(
                 rootfile, start=start, stop=stop, step=step
             )
             wf0_list.append(wf0)
             wf1_list.append(wf1)
             t_list.append(t)
-        return np.stack(wf0_list), np.stack(wf1_list), np.array(t_list)
+            event_number_list.append(event_number)
+        return np.stack(wf0_list), np.stack(wf1_list), np.array(t_list), np.array(event_number_list)
 
 
 def plot_waveforms(*waveforms):
@@ -538,17 +612,142 @@ def hist_waveforms(*waveforms):
 
 if __name__ == '__main__':
     #plot_example(n_event=3, batch_size=2, n_sample=90, n_sample_init=20, pe_rate_mhz=20, bin_size_ns=0.5, sampling_rate_mhz=250, amplitude_gain=5., noise_lsb=1.05, baseline=0, relative_gain_std=0.1)
-    # wf0_hvoff, wf1_hvoff = read_experimental(
+    # wf0_hvoff, wf1_hvoff, _, _ = read_experimental(
     #     'experimental_waveforms/SST1M_01_20190523_0000_0000_raw_waveforms.root',
     #     start=None, stop=100, step=None
     # )
     # baseline_wf0 = np.mean(wf0_hvoff)
     # baseline_wf1 = np.mean(wf1_hvoff)
-    wf0, wf1, t = read_experimental(
-        'experimental_waveforms/SST1M_01_20190523_0104_0108_raw_waveforms.root',
-        start=None, stop=100, step=None
-    )
-    hist_waveforms(wf0.flatten(), wf1.flatten())
-    plot_waveforms(wf0, wf1)
-    #generator = generator_andrii_toy('/home/yves/Downloads/2.8V_8e+07_Hz_Compenstion_Off_test.root')
-    #waveform_batch, n_pe_batch = next(generator)
+    # wf0, wf1, t, _ = read_experimental(
+    #     'experimental_waveforms/SST1M_01_20190523_0104_0108_raw_waveforms.root',
+    #     start=None, stop=100, step=None
+    # )
+    # hist_waveforms(wf0.flatten(), wf1.flatten())
+    # plot_waveforms(wf0, wf1)
+    # generator = generator_andrii_toy('/home/yves/Downloads/2.8V_8e+07_Hz_Compenstion_Off_test.root')
+    # waveform_batch, n_pe_batch = next(generator)
+
+    from matplotlib import pyplot as plt
+    import matplotlib.dates as mdates
+    from pe_extractor.intensity_interferometry import get_baseline
+    from datetime import datetime, timedelta
+
+    start = 0
+    step = 1
+    stop = 10000
+    input_files = [
+        #'experimental_waveforms/SST1M01_20190625_0000_0000_raw_waveforms.root',
+        # 'experimental_waveforms/SST1M01_20190625_0012_0012_raw_waveforms.root',
+        # 'experimental_waveforms/SST1M01_20190625_0013_0013_raw_waveforms.root',
+        # 'experimental_waveforms/SST1M01_20190625_0026_0026_raw_waveforms.root',
+        # 'experimental_waveforms/SST1M01_20190625_0038_0038_raw_waveforms.root',
+        'experimental_waveforms/SST1M_01_20190523_0003_0003_raw_waveforms.root',
+        'experimental_waveforms/SST1M_01_20190523_0004_0004_raw_waveforms.root',
+        'experimental_waveforms/SST1M_01_20190523_0103_0103_raw_waveforms.root',
+        'experimental_waveforms/SST1M_01_20190523_0104_0104_raw_waveforms.root',
+        'experimental_waveforms/SST1M_01_20190523_0203_0203_raw_waveforms.root'
+    ]
+    configs = [
+        #'june_pp_od4',
+        # 'june_pp1_od4',
+        # 'june_sp_od4 run start',
+        # 'june_lamp_off',
+        # 'june_lamp_off1',
+        'may_hv_off',
+        'may_pp_od5 run start',
+        'may_pp_od5 run end',
+        'may_sp_od5 run start',
+        'may_sp_od5 run end'
+    ]
+    #input_files = ['experimental_waveforms/SST1M_01_20190523_0000_0000_raw_waveforms.root',]
+    #configs = ['may_hv_off',]
+
+    adc_bins = range(2000, 2200)
+
+    fig_hist0, ax_hist0 = plt.subplots(1, 1, figsize=(8, 6))
+    fig_hist1, ax_hist1 = plt.subplots(1, 1, figsize=(8, 6))
+    fig_hist2, ax_hist2 = plt.subplots(1, 1, figsize=(8, 6))
+    ax_hist1.grid()
+    ax_hist0.grid()
+    for input_file, config in zip(input_files, configs):
+        print(config, ": reading", input_file)
+        wf0, wf1, t, event_number = read_experimental(
+            input_file, start=start, stop=stop, step=step
+        )
+
+        baseline_wf0 = get_baseline(wf0, margin_lsb=5, samples_around=4)
+        baseline_wf1 = get_baseline(wf1, margin_lsb=5, samples_around=4)
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        if t is None:
+            t = np.arange(wf0.shape[0])
+            ax.plot(t, np.min(wf0, axis=1), 'b-', label='wf0')
+            ax.set_xlabel('waveform #')
+        else:
+            order = np.argsort(t)
+            wf0 = wf0[order, :]
+            wf1 = wf1[order, :]
+            t_sorted = t[order]
+            t_datetime = t_sorted.astype('datetime64[us]').astype(datetime)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%M:%S.%f'))
+            ax.plot_date(t_datetime, np.min(wf0, axis=1), 'b-', label='wf0', tz='UTC')
+            ax.set_xlabel('time [UTC]')
+        ax.plot(t_datetime, np.max(wf0, axis=1), 'b-', label=None)
+        ax.plot(t_datetime, baseline_wf0, 'c-', label='baseline wf0')
+        ax.plot(t_datetime, np.min(wf1, axis=1), 'r-', label='wf1')
+        ax.plot(t_datetime, np.max(wf1, axis=1), 'r-', label=None)
+        ax.plot(t_datetime, baseline_wf1, 'm-', label='baseline wf1')
+        ax.set_ylabel('ADC min and max [LSB]')
+        ax.legend()
+        ax.grid()
+        ax.set_title('min and max in configuration: ' + config)
+        fig.autofmt_xdate()
+        fig.savefig('minmax_waveform_' + config + '.png')
+        plt.close(fig)
+
+        fig, ax = plt.subplots(1, 1, figsize=(8,6))
+        ax.plot(wf0[0, :], 'b-', label='wf0')
+        ax.plot([0, wf0.shape[1]], [baseline_wf0[0], baseline_wf0[0]], 'c-', label='baseline wf0')
+        ax.plot(wf1[0, :], 'r-', label='wf1')
+        ax.plot([0, wf1.shape[1]], [baseline_wf1[0], baseline_wf1[0]], 'm-', label='baseline wf1')
+        ax.set_xlabel('sample #')
+        ax.set_ylabel('ADC reading [LSB]')
+        ax.legend()
+        ax.grid()
+        ax.set_title('1st waveform in configuration: ' + config)
+        fig.savefig('waveform_' + config + '.png')
+        plt.close(fig)
+
+        ax_hist0.hist(wf0.flatten(), bins=adc_bins, label=config, histtype='step')
+        ax_hist1.hist(wf1.flatten(), bins=adc_bins, label=config, histtype='step')
+        dt = (t_sorted[1:]-t_sorted[:-1]) / np.ones(1, dtype='timedelta64[ns]') * 1.e-3
+        dt_too_big = dt > 1000
+        if np.sum(dt_too_big)>0:
+            print(
+                "WARNING:", np.sum(dt_too_big),
+                "with timestamps more than 1ms appart"
+            )
+        ax_hist2.hist(dt, np.arange(0, 20, 4e-3), label=config, histtype='step')
+        #ax_hist2.hist(dt[~dt_too_big], 100, label=config, histtype='step')
+    ax_hist0.set_xlabel('ADC reading [LSB]')
+    ax_hist0.set_ylabel('# of samples')
+    ax_hist0.legend()
+    ax_hist0.set_title('1st pixel')
+    ax_hist0.set_yscale('log')
+    fig_hist0.savefig('hist_wf0.png')
+    plt.close(fig_hist0)
+
+    ax_hist1.set_xlabel('ADC reading [LSB]')
+    ax_hist1.set_ylabel('# of samples')
+    ax_hist1.legend()
+    ax_hist1.set_title('2nd pixel')
+    ax_hist1.set_yscale('log')
+    fig_hist1.savefig('hist_wf1.png')
+    plt.close(fig_hist1)
+
+    ax_hist2.set_xlabel('$\Delta t [us]$')
+    ax_hist2.set_ylabel('# of samples')
+    ax_hist2.legend()
+    ax_hist2.set_title('time difference of consecutive waveforms')
+    ax_hist2.set_yscale('log')
+    fig_hist2.savefig('hist_dt.png')
+    plt.close(fig_hist2)

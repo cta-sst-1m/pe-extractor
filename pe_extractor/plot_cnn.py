@@ -6,6 +6,8 @@ from pe_extractor.train_cnn import loss_all, loss_cumulative, loss_chi2, loss_co
     timebin_from_prediction
 import tensorflow as tf
 import os
+from .intensity_interferometry import get_baseline
+from .toy import read_experimental, model_predict
 
 
 def sum_norm_gaussian(x_val, offset, *args):
@@ -134,10 +136,10 @@ def fit_sum_norm_gaussian(
 def toy_nsb_prediction(
         run_name, pe_rate_mhz=30, sampling_rate_mhz=250, batch_size=400,
         noise_lsb=1.05, bin_size_ns=0.5, n_sample=90, sigma_smooth_pe_ns=0.,
-        baseline=0., relative_gain_std=0.1
+        baseline=0., relative_gain_std=0.1, shift_proba_bin=0
 ):
     # toy parameters
-    n_sample_init = 20
+    n_sample_init = 50
     amplitude_gain = 5.
 
     generator = generator_nsb(
@@ -146,14 +148,9 @@ def toy_nsb_prediction(
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz,
         amplitude_gain=amplitude_gain, noise_lsb=noise_lsb,
         sigma_smooth_pe_ns=sigma_smooth_pe_ns, baseline=baseline,
-        relative_gain_std=relative_gain_std
+        relative_gain_std=relative_gain_std, shift_proba_bin=shift_proba_bin
     )
-    generator_andrii = generator_andrii_toy(
-        '/home/yves/Downloads/2.8V_8e+07_Hz_Compenstion_Off_test.root',
-        batch_size=batch_size, n_sample=n_sample, n_bin_per_sample=8
-    )
-
-    waveform, pe = next(generator_andrii)
+    waveform, pe = next(generator)
 
     model = tf.keras.models.load_model(
         './Model/' + run_name + '.h5',
@@ -161,6 +158,11 @@ def toy_nsb_prediction(
             'loss_all': loss_all, 'loss_cumulative': loss_cumulative,
             'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
         }
+    )
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(1e-3),
+        loss=loss_all,  # loss_all
+        metrics=[loss_cumulative, loss_chi2, loss_continuity]  # loss_cumulative, loss_chi2, loss_continuity
     )
     print('model ' + run_name + ' is loaded')
     predict_pe = model.predict(waveform)
@@ -216,57 +218,57 @@ def pe_stat(bin_size_ns, pe_truth, predict_pe, fit_type="norm_gauss"):
 
 def plot_prediction(
         bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
-        title=None, filename=None, fit_type="norm_gauss"
+        title=None, filename=None, fit_type="norm_gauss", batch_index=0,
 ):
     if fit_type is not None:
         (
             offset, amplitude, center, width, d_offset, d_amplitude, d_center,
             d_width
         ) = pe_stat(
-            bin_size_ns, pe_truth[0, :], predict_pe[0, :], fit_type=fit_type
+            bin_size_ns, pe_truth[batch_index, :], predict_pe[batch_index, :], fit_type=fit_type
         )
 
     n_bin = pe_truth.shape[1]
-    t_pe_ns = np.arange(0, n_bin) * bin_size_ns
+    t_pe_ns = np.arange(0, n_bin) * bin_size_ns + t_samples_ns[0]
 
     fig, axes = plt.subplots(3, 1, sharex='all', figsize=(8, 8))
-    axes[0].plot(t_samples_ns, waveform[0, :])
+    axes[0].plot(t_samples_ns, waveform[batch_index, :])
     axes[0].set_ylabel('waveform [LSB]')
-    axes[1].plot(t_pe_ns, pe_truth[0, :], label="truth")
+    axes[1].plot(t_pe_ns, pe_truth[batch_index, :], label="truth")
     axes[1].plot(
-        t_pe_ns[50:-50],
-        predict_pe[0, 50:-50],
+        t_pe_ns,
+        predict_pe[batch_index, :],
         label="probability predicted"
     )
     if fit_type == "norm_gauss":
         axes[1].plot(
-            t_pe_ns[50:-50],
+            t_pe_ns,
             bin_size_ns * sum_norm_gaussian(
-                t_pe_ns[50:-50], offset, *center, *width
+                t_pe_ns, offset, *center, *width
             ),
             '--', label="gaussian fit",
         )
     elif fit_type == "gauss":
         axes[1].plot(
-            t_pe_ns[50:-50],
+            t_pe_ns,
             bin_size_ns * sum_gaussian(
-                t_pe_ns[50:-50], offset, amplitude, center, width
+                t_pe_ns, offset, amplitude, center, width
             ),
             '--', label="gaussian fit",
         )
     axes[1].set_ylabel('# pe')
     axes[1].legend()
     axes[2].plot(
-        t_pe_ns[50:-50], np.cumsum(pe_truth[0, 50:-50]),
+        t_pe_ns, np.cumsum(pe_truth[batch_index, :]),
         label="truth"
     )
     axes[2].plot(
-        t_pe_ns[50:-50], np.cumsum(predict_pe[0, 50:-50]),
+        t_pe_ns, np.cumsum(predict_pe[batch_index, :]),
         label="prediction"
     )
     axes[2].plot(
-        t_pe_ns[50:-50],
-        np.cumsum(pe_truth[0, 50:-50]) - np.cumsum(predict_pe[0, 50:-50]),
+        t_pe_ns,
+        np.cumsum(pe_truth[batch_index, :]) - np.cumsum(predict_pe[batch_index, :]),
         label="truth - prediction"
     )
     axes[2].set_xlabel('time [ns]')
@@ -434,7 +436,8 @@ def plot_resolution_flash(
         n_pe_flashes=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000),
         noise_lsb=1, nsb_rates_mhz=(40,), batch_size=400,
         time_resolution_windows_ns=(16, ),
-        charge_resolution_windows_ns=(28, )
+        charge_resolution_windows_ns=(28, ),
+        bin_flash=80, bin_size_ns=0.5, shift_proba_bin=0
 
 ):
     from cycler import cycler
@@ -463,36 +466,38 @@ def plot_resolution_flash(
     for i, n_pe_flash in enumerate(n_pe_flashes):
         print(n_pe_flash, 'pe flashes')
         gen_flash = generator_flash(
-            n_event=1, batch_size=batch_size, n_sample=90, bin_flash=80,
-            n_pe_flash=(n_pe_flash, n_pe_flash), bin_size_ns=0.5,
-            sampling_rate_mhz=250, amplitude_gain=5., noise_lsb=noise_lsb
+            n_event=1, batch_size=batch_size, n_sample=4320, bin_flash=bin_flash,
+            n_pe_flash=(n_pe_flash, n_pe_flash), bin_size_ns=bin_size_ns,
+            sampling_rate_mhz=250, amplitude_gain=5., noise_lsb=noise_lsb,
+            shift_proba_bin=shift_proba_bin
         )
         waveform_flash, pe_truth_flash = next(gen_flash)
         for r, nsb_rate_mhz in enumerate(nsb_rates_mhz):
             gen_nsb = generator_nsb(
-                n_event=1, batch_size=batch_size, n_sample=110, n_sample_init=20,
-                pe_rate_mhz=nsb_rate_mhz, bin_size_ns=0.5, sampling_rate_mhz=250,
-                amplitude_gain=5., noise_lsb=0, sigma_smooth_pe_ns=0.
+                n_event=1, batch_size=batch_size, n_sample=4340, n_sample_init=20,
+                pe_rate_mhz=nsb_rate_mhz, bin_size_ns=bin_size_ns, sampling_rate_mhz=250,
+                amplitude_gain=5., noise_lsb=0, sigma_smooth_pe_ns=0.,
+                shift_proba_bin = shift_proba_bin
             )
             waveform_nsb, pe_truth_nsb = next(gen_nsb)
             predict_pe = model.predict(waveform_flash + waveform_nsb)
             for t in range(n_windows_time_resol):
                 delta_time_ns = time_resolution_windows_ns[t] / 2
                 t_bias, t_resol = time_resolution_flash(
-                    predict_pe=predict_pe, time_flash=40,
-                    bin_size_ns=0.5, delta_time_ns=delta_time_ns
+                    predict_pe=predict_pe, time_flash=bin_flash*bin_size_ns,
+                    bin_size_ns=bin_size_ns, delta_time_ns=delta_time_ns
                 )
                 time_bias[r, i, t] = t_bias
                 time_resolution[r, i] = t_resol
             for c in range(n_windows_charge_resol):
                 delta_time_ns = charge_resolution_windows_ns[c] / 2
                 charge_pred = charge_flash(
-                    predict_pe=predict_pe, time_flash=40,
-                    bin_size_ns=0.5, delta_time_ns=delta_time_ns
+                    predict_pe=predict_pe, time_flash=(bin_flash+shift_proba_bin)*bin_size_ns,
+                    bin_size_ns=bin_size_ns, delta_time_ns=delta_time_ns
                 )
                 charge_true = charge_flash(
-                    predict_pe=pe_truth_flash+pe_truth_nsb, time_flash=40,
-                    bin_size_ns=0.5, delta_time_ns=delta_time_ns
+                    predict_pe=pe_truth_flash+pe_truth_nsb, time_flash=(bin_flash+shift_proba_bin)*bin_size_ns,
+                    bin_size_ns=bin_size_ns, delta_time_ns=delta_time_ns
                 )
                 charge_bias[r, i, c] = np.nanmean(charge_pred - charge_true) /\
                                        np.mean(charge_true)
@@ -581,31 +586,34 @@ def plot_resolution_flash(
     plt.close(fig)
 
 
-def demo_nsb(run_name):
-    pe_rate_mhz = 20
-    batch_size = 400
-    sigma_smooth_pe_ns = 0.
+def demo_nsb(run_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_range=(0,100), sigma_smooth_pe_ns=2):
+    pe_rate_mhz = 10
+    batch_size = 1
     baseline = 0.
-    relative_gain_std = .1
-
-
+    relative_gain_std = .05
     sampling_rate_mhz = 250
-    noise = [0, 2]  # 1.05
+    noise = [0, 1, 2]  # 1.05
     bin_size_ns = 0.5
-    n_sample = 90
-    t_samples_ns = np.arange(0, n_sample) * 1000 / sampling_rate_mhz
+
+
+    t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
     for noise_lsb in noise:
         title = 'p.e. rate ' + str(pe_rate_mhz) + 'MHz, noise ' + \
-                str(noise_lsb) + 'LSB'
+                str(noise_lsb) + 'LSB ' + \
+                str(shift_proba_bin*bin_size_ns) + ' ns delay on p.e.'
         waveform, pe_truth, predict_pe = toy_nsb_prediction(
             run_name, pe_rate_mhz=pe_rate_mhz,
             sampling_rate_mhz=sampling_rate_mhz, batch_size=batch_size,
             noise_lsb=noise_lsb, bin_size_ns=bin_size_ns,
             n_sample=n_sample, sigma_smooth_pe_ns=sigma_smooth_pe_ns,
-            baseline=baseline, relative_gain_std=relative_gain_std
+            baseline=baseline, relative_gain_std=relative_gain_std,
+            shift_proba_bin=shift_proba_bin
         )
-
-        t_samples_ns = np.arange(0, n_sample) * 1000 / sampling_rate_mhz
+        waveform = waveform[:, sample_range[0]:sample_range[1]]
+        n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
+        bin_range=(sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
+        pe_truth = pe_truth[:, bin_range[0]:bin_range[1]]
+        predict_pe = predict_pe[:, bin_range[0]:bin_range[1]]
         directory_plot = 'plots/' + run_name
         try:
             os.makedirs(directory_plot)
@@ -614,8 +622,9 @@ def demo_nsb(run_name):
         plot_prediction(
             bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
             filename=directory_plot + '/predict_noise' +
-                     str(noise_lsb) + '.png',
-            title=title, fit_type=None
+                     str(noise_lsb) + '_range' + str(sample_range[0]) +
+                     '-' +  str(sample_range[1]) + '.png',
+            title=title, fit_type=None, batch_index=batch_index,
         )
         # plot_probability_check(
         #     predict_pe, pe_truth,
@@ -629,9 +638,44 @@ def demo_nsb(run_name):
         # )
 
 
+def demo_data(run_name, datafile, shift_proba_bin=0, batch_index=0, sample_range=(0,100)):
+    wf0, wf1, _, _ = read_experimental(datafile, start=0, stop=1000)
+    sampling_rate_mhz = 250
+    bin_size_ns = 0.5
+    t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
+    title = datafile
+    import tensorflow as tf
+    model = tf.keras.models.load_model(
+        './Model/' + run_name + '.h5',
+        custom_objects={
+            'loss_all': loss_all, 'loss_cumulative': loss_cumulative,
+            'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
+        }
+    )
+    proba0 = model_predict(model, wf0, skip_bins=0)
+
+    waveform = wf0[:, sample_range[0]:sample_range[1]]
+    n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
+    bin_range=(sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
+    predict_pe = proba0[:, bin_range[0]:bin_range[1]]
+    directory_plot = 'plots/' + run_name
+    try:
+        os.makedirs(directory_plot)
+    except FileExistsError:
+        pass
+    plot_prediction(
+        bin_size_ns, None, predict_pe, t_samples_ns, waveform,
+        filename=directory_plot + '/predict_noise' +
+                 str(noise_lsb) + '_range' + str(sample_range[0]) +
+                 '-' +  str(sample_range[1]) + '.png',
+        title=title, fit_type=None, batch_index=batch_index,
+    )
+
+
 def demo_flasher(
         run_name, bin_size_ns=0.5, n_pe_flash=10, sampling_rate_mhz=250,
-        n_sample=90, noise_lsb=1, batch_size=400
+        n_sample=90, noise_lsb=1, batch_size=400, sample_range=(0, 80),
+        bin_flash=80, shift_proba_bin=0
 ):
     model = tf.keras.models.load_model(
         './Model/' + run_name + '.h5',
@@ -641,41 +685,49 @@ def demo_flasher(
         }
     )
     print('model ' + run_name + ' is loaded')
+    n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
+    bin_range = (sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
     gen = generator_flash(
-        n_event=1, batch_size=batch_size, n_sample=n_sample, bin_flash=80,
-        n_pe_flash=(n_pe_flash, n_pe_flash), bin_size_ns=bin_size_ns
-        , sampling_rate_mhz=sampling_rate_mhz,
-        amplitude_gain=5., noise_lsb=noise_lsb
+        n_event=1, batch_size=batch_size, n_sample=n_sample, bin_flash=bin_flash,
+        n_pe_flash=(n_pe_flash, n_pe_flash), bin_size_ns=bin_size_ns,
+        sampling_rate_mhz=sampling_rate_mhz, amplitude_gain=5.,
+        noise_lsb=noise_lsb, shift_proba_bin=shift_proba_bin
     )
     waveform, pe_truth = next(gen)
     predict_pe = model.predict(waveform)
     title = 'flash ampl.' + str(n_pe_flash) + 'pe, noise ' + \
             str(noise_lsb) + 'LSB'
-    t_samples_ns = np.arange(0, n_sample) * 1000 / sampling_rate_mhz
+    waveform = waveform[:, sample_range[0]:sample_range[1]]
+    t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
+    pe_truth = pe_truth[:, bin_range[0]:bin_range[1]]
+    predict_pe = predict_pe[:, bin_range[0]:bin_range[1]]
     plot_prediction(
         bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
         filename='plots/predict_flash' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
         title=title, fit_type="gauss"
     )
-    histo_resolution(
-        bin_size_ns, pe_truth, predict_pe,
-        filename='plots/resolution_flash' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
-        title=title, fit_type="gauss"
-    )
+    #histo_resolution(
+    #    bin_size_ns, pe_truth, predict_pe,
+    #    filename='plots/resolution_flash' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
+    #    title=title, fit_type="gauss"
+    #)
 
 
 if __name__ == '__main__':
 
-    #demo_flasher('cnn-example', n_pe_flash=10, noise_lsb=1, batch_size=400)
-    #demo_nsb('cnn-example')
-    model = 'deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth2.0_noise0-2_baseline0_run0rr'
-    n_pe_flashes = np.unique(np.round(np.logspace(0, 3, 25)).astype(int))
+    #model = 'deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth2.0_noise0-2_baseline0_run0rr'
+    model = 'C16x16_U2_C32x16_U2_C64x8_U2_C128x8_C64x4_C32x4_C16x2_C4x2_C1x1_C1x1_ns0.1_shift64_all1-50-10lr0.0002smooth1_amsgrad_run0'
+    n_pe_flashes = np.unique(np.round(np.logspace(0, 3, 15)).astype(int))
     for noise_lsb in range(3):
         plot_resolution_flash(
             model, filename='noise' + str(noise_lsb) + '.png',
             n_pe_flashes=n_pe_flashes,
             noise_lsb=noise_lsb, nsb_rates_mhz=(4, 50, 250, 500),
-            batch_size=10000, charge_resolution_windows_ns=(20, 28, 36),
-            time_resolution_windows_ns=(8, 16, 32)
+            batch_size=1000, charge_resolution_windows_ns=(20, 28, 36),
+            time_resolution_windows_ns=(8, 16, 32), shift_proba_bin=64
         )
+
+
+    #demo_nsb(model, n_sample=4320, shift_proba_bin=64, batch_index=0, sample_range=(0, 4320), sigma_smooth_pe_ns=1)
+    #demo_flasher(model, n_sample=4320, n_pe_flash=10, noise_lsb=1, batch_size=400, sample_range=(0, 40), shift_proba_bin=64)
 
