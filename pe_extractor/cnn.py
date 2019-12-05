@@ -130,9 +130,18 @@ class Correlation:
 
 
 class Extractor:
+    """
+    An Extractor object is used to process waveforms and get photo-electron
+    probabilities.
+    """
     orthogonal_initializer = tf.keras.initializers.Orthogonal()
 
     def __init__(self, n_sample, initializer=orthogonal_initializer):
+        """
+        Create an extractor object.
+        :param n_sample: Number of samples in the waveforms
+        :param initializer: A tf.keras.initializers , Orthogonal by default.
+        """
         self.n_sample = n_sample
         self.model = tf.keras.Sequential([
             tf.keras.layers.Reshape((n_sample, 1, 1), input_shape=(n_sample,)),
@@ -169,6 +178,21 @@ class Extractor:
             shift_proba_bin=64, sigma_smooth_pe_ns=2., steps_per_epoch=200,
             epochs=100
     ):
+        """
+        train the CNN.
+        :param run_name: name of the model
+        :param lr: learning rate
+        :param n_sample_init: parameter of the waveform generator used for
+        training.
+        :param batch_size: number of waveforms per batch
+        :param shift_proba_bin: how many bins the photo-electron probabilities
+        are shifted
+        :param sigma_smooth_pe_ns: the pe truth (integers) is smoothed by a
+        Gaussian of the given standard deviation. No smoothing is done if it is
+        set to 0.
+        :param steps_per_epoch: number of batch processed for each epoch
+        :param epochs: number of epoch used in the training.
+        """
         # model compilation
         print("compile model...")
         self.model.compile(
@@ -205,6 +229,10 @@ class Extractor:
         )
 
     def load(self, run_name):
+        """
+        Load an existing model
+        :param run_name: name of the model
+        """
         print("loading", run_name)
         model_loaded = tf.keras.models.load_model(
             './Model/' + run_name + '.h5',
@@ -218,14 +246,37 @@ class Extractor:
         self.model.set_weights(model_loaded.get_weights())
 
     def predict(self, wf):
+        """
+        extract photo-electrons from a batch of waveform
+        :param wf: batch of waveform (shape BxS where B is the batch size and S
+        is the number of sample per waveform)
+        :return: a batch of photo-electron probabilities (shape BxP where P is
+        the number of probability bins per waveforms)
+        """
         return self.model.predict(wf)
 
     def predict_generator(self, generator):
+        """
+        extract photo-electrons from a generator
+        :param generator: generator yielding lists of 2 elements where the first
+        element is a batch of waveforms (shape BxS where B is the batch size
+        and S is the number of sample per waveform)
+        :return: generator yielding batches of photo-electron probabilities
+        (shape BxP where P is the number of probability bins per waveforms)
+        """
         for wf, _ in generator:
             pe_pred = self.model.predict(wf)
             yield pe_pred
 
     def predict_wf_generator(self, generator):
+        """
+        extract photo-electrons from a generator
+        :param generator: generator yielding batches of waveforms
+        (shape BxS where B is the batch size and S is the number of sample
+        per waveform)
+        :return: generator yielding batches of photo-electron probabilities
+        (shape BxP where P is the number of probability bins per waveforms)
+        """
         for wf in generator:
             pe_pred = self.model.predict(wf)
             yield pe_pred

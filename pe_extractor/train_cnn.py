@@ -228,7 +228,7 @@ def continue_train_cnn(run_name):
     print('done training ' + run_name + 'r')
 
 
-def train_rnn(lr=5e-4, n_sample_init=50, batch_size=10, shift_proba_bin=64,
+def train_cnn(lr=5e-4, n_sample_init=50, batch_size=10, shift_proba_bin=64,
               sigma_smooth_pe_ns=2.):
 
     initializer = tf.keras.initializers.Orthogonal()
@@ -319,7 +319,7 @@ if __name__ == '__main__':
     shift = 64
     sigma_smooth_pe_ns = 1
 
-    model_name = train_rnn(
+    model_name = train_cnn(
         lr=0.0002, sigma_smooth_pe_ns=sigma_smooth_pe_ns,
         shift_proba_bin=shift, batch_size=30
     )
