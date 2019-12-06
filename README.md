@@ -16,7 +16,7 @@ $ git clone https://github.com/cta-sst-1m/pe-extractor.git
 
 $ pip install -e .
 
-An optional converter for zfits files is available (zfits_to_raw_wf), to compile it:
+An optional converter for zfits files is available (convert_zfits), to compile it:
 
 $ make
 
