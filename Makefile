@@ -12,16 +12,12 @@ CPP=g++
 CPPFLAGS=-std=c++11 -O3 -g -Wall
 LDFLAGS=-Wl,-rpath=./lib
 
-ifdef ACSROOT
-all: analyze_rootfile convert_zfits analyze_zfits
-else
-all: analyze_rootfile
-endif
+all: convert_zfits
 
-convert_zfits: convert_zfits.o zfits_datafile.o
+convert_zfits: convert_zfits.o zfits_datafile.o root_datafile.o
 	$(CPP) -o $@ $^ $(LDFLAGS) $(ROOTLIBS) $(ZFITSLIBS) $(PROTBUFLIB)
 
-convert_zfits.o: convert_zfits.cpp convert_zfits.h root_datafile.h root_datafile-impl.cpp
+convert_zfits.o: convert_zfits.cpp root_datafile.h root_datafile-impl.cpp
 	$(CPP) -c -o $@ $< $(CPPFLAGS) $(ROOTINCLUDE) $(ZFITSINCLUDE) $(PROTOBUFINCLUDE)
 
 zfits_datafile.o: zfits_datafile.cpp zfits_datafile.h root_datafile.h root_datafile-impl.cpp

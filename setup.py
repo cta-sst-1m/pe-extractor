@@ -14,6 +14,7 @@ install_requires=[
     'tqdm',
     'docopt'
     'astropy'
+    'matplotlib',
 ]
 
 setup(name='pe_extractor',

@@ -1,10 +1,11 @@
 import types
 import tensorflow as tf
 #tf.enable_eager_execution()
-from pe_extractor.toy import generator_nsb
+from pe_extractor.toy import generator_nsb, get_baseline, generator_andrii_toy, generator_andrii_toy_baselinesub
 from keras import backend as K
 import numpy as np
 from tqdm import tqdm
+from matplotlib import pyplot as plt
 
 
 class Correlation:
@@ -19,12 +20,18 @@ class Correlation:
             self.sample_type = sample_type
 
             def correlate_with_delay(shift_sample):
-                begin_wf1 = tf.stack([0, tf.maximum(shift_sample, 0)])
-                end_wf1 =  tf.stack([n_batch, tf.minimum(n_sample+shift_sample,n_sample)])
+                begin_wf1 = tf.stack(
+                    [0, tf.maximum(shift_sample, 0)]
+                )
+                end_wf1 = tf.stack(
+                    [n_batch, tf.minimum(n_sample+shift_sample, n_sample)]
+                )
                 size_wf1 = end_wf1 - begin_wf1
                 wf1_shifted = tf.slice(self.wf1, begin_wf1, size_wf1)
                 begin_wf2 = tf.stack([0, tf.maximum(-shift_sample, 0)])
-                end_wf2 = tf.stack([n_batch, tf.minimum(n_sample-shift_sample,n_sample)])
+                end_wf2 = tf.stack(
+                    [n_batch, tf.minimum(n_sample-shift_sample, n_sample)]
+                )
                 size_wf2 = end_wf2 - begin_wf2
                 wf2_shifted = tf.slice(self.wf2, begin_wf2, size_wf2)
                 sum_1 = tf.reduce_sum(wf1_shifted)
@@ -41,7 +48,10 @@ class Correlation:
                 parallel_iterations=parallel_iterations,
                 back_prop=False,
                 #infer_shape=False,
-                dtype=(tf.float32, tf.float32, tf.float32, tf.float32, tf.float32, tf.int64),
+                dtype=(
+                    tf.float32, tf.float32, tf.float32, tf.float32,
+                    tf.float32, tf.int64
+                ),
                 name="correlate_delays"
             )
             self.sum_1 = tf.identity(sum_1, name="sum_1")
@@ -374,9 +384,6 @@ def plot_example_andrii_toy(
         model, datafile, n_sample, margin_lsb=8., samples_around=5,
         shift_proba_bin=64, xlim=None, index=0, batch_size=10, plot="show"
 ):
-    from pe_extractor.toy import generator_andrii_toy_baselinesub
-    from matplotlib import pyplot as plt
-
     assert index < batch_size
     extractor_toy_andrii = Extractor(n_sample)
     extractor_toy_andrii.load(model)
@@ -444,9 +451,6 @@ def g2_andrii_toy(
         xlim=None, parallel_iterations=10,
         plot="show"
 ):
-    from pe_extractor.toy import generator_andrii_toy, get_baseline
-    from matplotlib import pyplot as plt
-
     #get baselines
     gen_baseline_pix1 = generator_andrii_toy(
         datafile_pix1, batch_size=1000, n_sample=n_sample,
@@ -556,9 +560,9 @@ def g2_andrii_toy(
     g2_pe_truth = count_pe_truth * sum_pe12_truth / (sum_pe1_truth*sum_pe2_truth)
     shift_wf_ns = 4. * np.array(shifts)
     shift_pe_ns = .5 * np.array(shifts)
-    plt.plot(shift_wf_ns, g2_wf, label='g2 from waveforms')
-    plt.plot(shift_pe_ns, g2_pe, label='g2 from CNN')
-    plt.plot(shift_pe_ns, g2_pe_truth, label='g2 from MC truth')
+    plt.plot(shift_wf_ns, g2_wf, '+-', label='g2 from waveforms')
+    plt.plot(shift_pe_ns, g2_pe, '+-', label='g2 from CNN')
+    plt.plot(shift_pe_ns, g2_pe_truth, '+-', label='g2 from MC truth')
     plt.xlabel('delay [ns]')
     plt.ylabel(r'$g^2(\tau)$')
     if xlim is not None:
@@ -933,7 +937,6 @@ def charge_resolution(
     plt.legend()
     plt.savefig('charge_resolution.png')
     plt.close(fig)
-
 
 
 if __name__ == '__main__':

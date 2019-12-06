@@ -28,7 +28,6 @@ using namespace std;
 
 void zfits_to_root(
   const char output_filename[], const vector<string> zfits_files,
-  const unsigned long max_delay_sample, const float sample_ns, 
   const size_t n_sample, const Long64_t n_waveform
 ) {
   // Create tree
