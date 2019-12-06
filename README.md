@@ -4,9 +4,11 @@ Author: Y. Renier
 Software to reconstruct photo-electrons (p.e.) arrival time from the waveforms using machine learning. 
 
 # Installation
-You need tensorflow, keras, tqdm and matplotlib to use pe-extractor.
+You need to install ROOT with its python3 library (see https://root.cern.ch/pyroot). 
 
-$ pip install tensorflow keras tqdm matplotlib
+You also need tensorflow, keras, tqdm, root_numpy and matplotlib to use pe-extractor.
+
+$ pip install tensorflow keras tqdm matplotlib root_numpy
 
 Download pe-extractor and install it
 
@@ -15,6 +17,7 @@ $ git clone https://github.com/cta-sst-1m/pe-extractor.git
 $ pip install -e .
 
 An optional converter for zfits files is available (zfits_to_raw_wf), to compile it:
+
 $ make
 
 # Usage

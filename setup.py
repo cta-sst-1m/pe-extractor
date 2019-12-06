@@ -3,13 +3,17 @@
 from distutils.core import setup
 
 install_requires=[
-    'tensorflow>=1.12',
+    'tensorflow>=1.12,<2.0',
     'keras',
+    'root_numpy',
     'numpy',
     'scipy',
     'matplotlib',
     'astropy'
-    'root-numpy'
+    'root-numpy',
+    'tqdm',
+    'docopt'
+    'astropy'
 ]
 
 setup(name='pe_extractor',
