@@ -3,8 +3,8 @@ PROTOBUFINCLUDE=-I./include/external/protobuf_archive/src
 TFINCULDE=-I./include  
 TFLIBS=-L./lib -ltensorflow_cc -ltensorflow_framework
 ACTLROOT=/home/ctauser/software/CamerasToACTL/trunk
-ZFITSLIBS=-L$(ACTLROOT)/Build.Yves/lib -lACTLCore -lZFitsIO
-ZFITSINCLUDE=-I$(ACTLROOT)/IO/Fits -I$(ACTLROOT)/Core -I$(ACTLROOT)/Build.Yves/Core
+ZFITSLIBS=-L$(ACTLROOT)/Build.Release/lib -lACTLCore -lZFitsIO
+ZFITSINCLUDE=-I$(ACTLROOT)/IO/Fits -I$(ACTLROOT)/Core -I$(ACTLROOT)/Build.Release/Core
 ROOTLIBS=$(shell root-config --libs)
 ROOTINCLUDE=-I$(shell root-config --incdir)
 
@@ -17,7 +17,7 @@ all: convert_zfits
 convert_zfits: convert_zfits.o zfits_datafile.o root_datafile.o
 	$(CPP) -o $@ $^ $(LDFLAGS) $(ROOTLIBS) $(ZFITSLIBS) $(PROTBUFLIB)
 
-convert_zfits.o: convert_zfits.cpp root_datafile.h root_datafile-impl.cpp
+convert_zfits.o: convert_zfits.cpp root_datafile.h root_datafile-impl.cpp zfits_datafile.h
 	$(CPP) -c -o $@ $< $(CPPFLAGS) $(ROOTINCLUDE) $(ZFITSINCLUDE) $(PROTOBUFINCLUDE)
 
 zfits_datafile.o: zfits_datafile.cpp zfits_datafile.h root_datafile.h root_datafile-impl.cpp
