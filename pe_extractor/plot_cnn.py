@@ -203,8 +203,8 @@ def pe_stat(bin_size_ns, pe_truth, predict_pe, fit_type="norm_gauss"):
             offset, amplitude, center, width, d_offset, d_amplitude, d_center,
             d_width
         ) = fit_gaussian_pulse(
-                t_pe_ns[50:-50],
-                predict_pe[50:-50] / bin_size_ns,
+                t_pe_ns,
+                predict_pe / bin_size_ns,
                 amplitudes_init=ampl_init, centers_init=centers_init,
                 widths_init=widths_init, offset_init=offset_init
             )
@@ -237,10 +237,11 @@ def plot_prediction(
             offset, amplitude, center, width, d_offset, d_amplitude, d_center,
             d_width
         ) = pe_stat(
-            bin_size_ns, pe_truth[batch_index, :], predict_pe[batch_index, :], fit_type=fit_type
+            bin_size_ns, pe_truth[batch_index, :], predict_pe[batch_index, :],
+            fit_type=fit_type
         )
+        center += t_samples_ns[0]
 
-    
     n_bin = predict_pe.shape[1]
     t_pe_ns = np.arange(0, n_bin) * bin_size_ns + t_samples_ns[0]
 
@@ -268,7 +269,8 @@ def plot_prediction(
             bin_size_ns * sum_gaussian(
                 t_pe_ns, offset, amplitude, center, width
             ),
-            '--', label="gaussian fit",
+            '--',
+            label="Gaussian fit: \mu={:.2f} \sigma={:.2f} \n amplitude: {:.2f}".format(center, width, amplitude)
         )
     axes[1].set_ylabel('# pe')
     axes[1].legend()
@@ -721,6 +723,22 @@ def demo_flasher(
         n_sample=90, noise_lsb=1, batch_size=400, sample_range=(0, 80),
         bin_flash=80, shift_proba_bin=0
 ):
+    """
+    Simulates a instantaneous flash of n_pe_flash photo-electrons and plot
+    the waveform, the prediction and its cumulative.
+    :param model_name: name of the CNN model to use.
+    :param bin_size_ns: size of the probability bins.
+    :param n_pe_flash: amplitude of the flash in photo-electron.
+    :param sampling_rate_mhz: waveform sampling rate
+    :param n_sample: number of samples per waveform
+    :param noise_lsb: amplitude (in ADC count) of the noise.
+    :param batch_size: number of waveform to simulate
+    :param sample_range: a list of 2 elements containing the minimum and
+    maximum sample to plot.
+    :param bin_flash: index of the probability time bin when the flash happens.
+    :param shift_proba_bin: how many bin the prediction should be shifted
+    (should be the same value as during the training).
+    """
     model = tf.keras.models.load_model(
         './Model/' + model_name + '.h5',
         custom_objects={
@@ -735,24 +753,27 @@ def demo_flasher(
         n_event=1, batch_size=batch_size, n_sample=n_sample, bin_flash=bin_flash,
         n_pe_flash=(n_pe_flash, n_pe_flash), bin_size_ns=bin_size_ns,
         sampling_rate_mhz=sampling_rate_mhz, amplitude_gain=5.,
-        noise_lsb=noise_lsb, shift_proba_bin=shift_proba_bin
+        noise_lsb=noise_lsb, shift_proba_bin=0
     )
     waveform, pe_truth = next(gen)
-    predict_pe = model.predict(waveform)
+    predict_pe = model_predict(model, waveform, skip_bins=0,
+                              shift_proba_bin=-shift_proba_bin)
     title = 'flash ampl.' + str(n_pe_flash) + 'pe, noise ' + \
             str(noise_lsb) + 'LSB'
     waveform = waveform[:, sample_range[0]:sample_range[1]]
     t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
     pe_truth = pe_truth[:, bin_range[0]:bin_range[1]]
     predict_pe = predict_pe[:, bin_range[0]:bin_range[1]]
+    directory_plot = 'plots/' + model_name
+    filename = directory_plot + '/predict_flash' + str(n_pe_flash) + 'pe_noise' \
+               + str(noise_lsb) + 'LSB.png'
     plot_prediction(
         bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
-        filename='plots/predict_flash' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
-        title=title, fit_type="gauss"
+        filename=filename, title=title, fit_type="gauss"
     )
     #histo_resolution(
     #    bin_size_ns, pe_truth, predict_pe,
-    #    filename='plots/resolution_flash' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
+    #    filename='plots/resolution_flash_' + str(n_pe_flash) + 'pe_noise' + str(noise_lsb) + 'LSB.png',
     #    title=title, fit_type="gauss"
     #)
 
@@ -773,5 +794,4 @@ if __name__ == '__main__':
     datafile = '/home/yves/prog/pe-extractor/experimental_waveforms/SST1M_01_20200109_0207.root'
     demo_data(model, datafile, shift_proba_bin=64, batch_index=100, sample_range=(1000, 2000))
     #demo_nsb(model, n_sample=4320, shift_proba_bin=64, batch_index=0, sample_range=(0, 4320), sigma_smooth_pe_ns=1)
-    #demo_flasher(model, n_sample=4320, n_pe_flash=10, noise_lsb=1, batch_size=400, sample_range=(0, 40), shift_proba_bin=64)
-
+    #demo_flasher(model, n_sample=4320, n_pe_flash=1000, noise_lsb=1, batch_size=400, sample_range=(10, 25), shift_proba_bin=64, bin_flash=100)
