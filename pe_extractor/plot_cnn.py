@@ -664,13 +664,19 @@ def demo_data(model_name, datafile, shift_proba_bin=0, batch_index=0, sample_ran
     :param sample_range: a list of 2 elements containing the minimum and
     maximum sample to plot.
     """
-    wf0, _, _, _ = read_experimental(datafile, start=0, stop=1000)
+    wf0, wf1, _, _ = read_experimental(datafile, start=0, stop=10000)
     wf0_baselines = get_baseline(wf0)
     wf0_baseline = np.nanmean(wf0_baselines)
-
     print("baseline found for wf0:", wf0_baseline, "+-",
           np.nanstd(wf0_baselines))
+    wf1_baselines = get_baseline(wf1)
+    wf1_baseline = np.nanmean(wf1_baselines)
+    print("baseline found for wf1:", wf1_baseline, "+-",
+          np.nanstd(wf1_baselines))
+
+    wf0, wf1, _, _ = read_experimental(datafile, start=batch_index, stop=batch_index+1)
     wf0 = wf0.astype(np.float64) - wf0_baseline
+    wf1 = wf1.astype(np.float64) - wf1_baseline
     sampling_rate_mhz = 250
     bin_size_ns = 0.5
     t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
@@ -683,22 +689,30 @@ def demo_data(model_name, datafile, shift_proba_bin=0, batch_index=0, sample_ran
             'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
         }
     )
-    proba0 = model_predict(model, wf0, skip_bins=0, shift_proba_bin=-shift_proba_bin)
-
-    waveform = wf0[:, sample_range[0]:sample_range[1]]
+    proba_wf0 = model_predict(model, wf0, skip_bins=0, shift_proba_bin=-shift_proba_bin)
+    proba_wf1 = model_predict(model, wf1, skip_bins=0, shift_proba_bin=-shift_proba_bin)
+    waveform0 = wf0[:, sample_range[0]:sample_range[1]]
+    waveform1 = wf1[:, sample_range[0]:sample_range[1]]
     n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
     bin_range=(sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
-    predict_pe = proba0[:, bin_range[0]:bin_range[1]]
+    predict_wf0 = proba_wf0[:, bin_range[0]:bin_range[1]]
+    predict_wf1 = proba_wf1[:, bin_range[0]:bin_range[1]]
     directory_plot = 'plots/' + model_name
     try:
         os.makedirs(directory_plot)
     except FileExistsError:
         pass
     plot_prediction(
-        bin_size_ns, None, predict_pe, t_samples_ns, waveform,
-        filename=directory_plot + '/predict_data_range' + str(sample_range[0]) +
+        bin_size_ns, None, predict_wf0, t_samples_ns, waveform0,
+        filename=directory_plot + '/predict_wf0_range' + str(sample_range[0]) +
                  '-' +  str(sample_range[1]) + '.png',
-        title=title, fit_type=None, batch_index=batch_index,
+        title=title, fit_type=None, batch_index=0,
+    )
+    plot_prediction(
+        bin_size_ns, None, predict_wf1, t_samples_ns, waveform1,
+        filename=directory_plot + '/predict_wf1_range' + str(sample_range[0]) +
+                 '-' +  str(sample_range[1]) + '.png',
+        title=title, fit_type=None, batch_index=0,
     )
 
 
@@ -757,7 +771,7 @@ if __name__ == '__main__':
     #         time_resolution_windows_ns=(8, 16, 32), shift_proba_bin=64
     #     )
     datafile = '/home/yves/prog/pe-extractor/experimental_waveforms/SST1M_01_20200109_0207.root'
-    demo_data(model, datafile, shift_proba_bin=64, batch_index=0, sample_range=(0,100))
+    demo_data(model, datafile, shift_proba_bin=64, batch_index=100, sample_range=(1000, 2000))
     #demo_nsb(model, n_sample=4320, shift_proba_bin=64, batch_index=0, sample_range=(0, 4320), sigma_smooth_pe_ns=1)
     #demo_flasher(model, n_sample=4320, n_pe_flash=10, noise_lsb=1, batch_size=400, sample_range=(0, 40), shift_proba_bin=64)
 
