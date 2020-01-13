@@ -341,19 +341,22 @@ def generator_nsb(
 
 
 def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
-                  skip_bins=64):
+                  skip_bins=64, shift_proba_bin=0):
     """
     Do model prediction, reshaping the input as needed to feed the model.
     :param model: tf.keras.model object
     (typically from tf.keras.models.load_model() )
-    :param big_input: data used to make predictions
+    :param big_input: data used to make predictions. 1 row per input waveform.
     :param max_sample: maximum number of samples to be run together.
     If the input is bigger, prection will be done by parts
     :param continuous_waveform: if True, the different waveforms
     within the batch are traited as they are a single long waveform.
-    :param skip_bins: number of bin at the begining and at the end
+    :param skip_bins: number of bin at the beginning and at the end
     of the prediction to discard
-    :return:
+    :param shift_proba_bin: how many bin the prediction should be shifted
+    (should be the same value as during the training).
+    :return: an array containing the photo-electron probabilities.
+    1 row per input waveform.
     """
     initial_shape = big_input.shape
     if continuous_waveform:
@@ -427,7 +430,12 @@ def model_predict(model, big_input, max_sample=1e4, continuous_waveform=False,
             #print('n_valid_bin:', n_valid_bin)
         big_output[sub_batch_start:sub_batch_stop, :] = sub_batch_pred
     output = big_output.reshape([initial_shape[0], initial_shape[1] * nbin_per_sample])
-    return output
+    proba_shifted = np.roll(output, shift_proba_bin, axis=1)
+    if shift_proba_bin > 0:
+        proba_shifted[:, :shift_proba_bin] = 0
+    elif shift_proba_bin < 0:
+        proba_shifted[:, shift_proba_bin:] = 0
+    return proba_shifted
 
 
 def generator_andrii_toy(

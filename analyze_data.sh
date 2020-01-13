@@ -25,4 +25,4 @@ fi
 shift_opt="--shift_in_sample=${shifts_sample}"
 output_file=${file_in%_raw_waveforms.root}_g2.npz
 g2_plot=${output_file%.npz}.png
-python analyze_data.py ${shift_opt} ${max_events_opt} --model=${model} --file_off=${file_off} --g2_plot=${g2_plot} --output_file=${output_file} ${file_in}
+python3 analyze_data.py ${shift_opt} ${max_events_opt} --model=${model} --file_off=${file_off} --g2_plot=${g2_plot} --output_file=${output_file} ${file_in}

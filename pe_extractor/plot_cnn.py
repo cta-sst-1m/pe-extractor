@@ -6,8 +6,8 @@ from pe_extractor.train_cnn import loss_all, loss_cumulative, loss_chi2, loss_co
     timebin_from_prediction
 import tensorflow as tf
 import os
-from .intensity_interferometry import get_baseline
-from .toy import read_experimental, model_predict
+from pe_extractor.intensity_interferometry import get_baseline
+from pe_extractor.toy import read_experimental, model_predict
 
 
 def sum_norm_gaussian(x_val, offset, *args):
@@ -134,7 +134,7 @@ def fit_sum_norm_gaussian(
 
 
 def toy_nsb_prediction(
-        run_name, pe_rate_mhz=30, sampling_rate_mhz=250, batch_size=400,
+        model_name, pe_rate_mhz=30, sampling_rate_mhz=250, batch_size=400,
         noise_lsb=1.05, bin_size_ns=0.5, n_sample=90, sigma_smooth_pe_ns=0.,
         baseline=0., relative_gain_std=0.1, shift_proba_bin=0
 ):
@@ -153,7 +153,7 @@ def toy_nsb_prediction(
     waveform, pe = next(generator)
 
     model = tf.keras.models.load_model(
-        './Model/' + run_name + '.h5',
+        './Model/' + model_name + '.h5',
         custom_objects={
             'loss_all': loss_all, 'loss_cumulative': loss_cumulative,
             'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
@@ -164,7 +164,7 @@ def toy_nsb_prediction(
         loss=loss_all,  # loss_all
         metrics=[loss_cumulative, loss_chi2, loss_continuity]  # loss_cumulative, loss_chi2, loss_continuity
     )
-    print('model ' + run_name + ' is loaded')
+    print('model ' + model_name + ' is loaded')
     predict_pe = model.predict(waveform)
     loss = model.evaluate(x=waveform, y=pe)
     print('ĺoss=', loss)
@@ -220,6 +220,18 @@ def plot_prediction(
         bin_size_ns, pe_truth, predict_pe, t_samples_ns, waveform,
         title=None, filename=None, fit_type="norm_gauss", batch_index=0,
 ):
+    """
+    Plot the prediction of the CNN along eventually with the Monte Carlo truth.
+    :param bin_size_ns: length of a probability time bin (in  ns).
+    :param pe_truth: array of probability of pe corresponding to the Monte Carlo truth. Can be set to None so it is not plotted.
+    :param predict_pe: array of probability of pe corresponding to the CNN prediction
+    :param t_samples_ns: duration of a waveform's sample (in ns)
+    :param waveform: array of ADC values (1 row per waveform)
+    :param title: Title of the plot. If set to None, no title is used. (Default: None)
+    :param filename: name of the file where the plot will be saved. If set to None, the plot will be shown istead of being saved. (Default: None)
+    :param fit_type: the pe prediction by the CNN can be fitted by several Gaussians. If fit_type is None, no fit is performed, if fit_type is "norm_gauss" the Gaussians are of unity areas, if fit_type is "gauss" a single Gaussian of free amplitude is fitted.
+    :param batch_index: index of the waveform to plot (the row of pe_truth, predict_pe and waveform which is to be used).
+    """
     if fit_type is not None:
         (
             offset, amplitude, center, width, d_offset, d_amplitude, d_center,
@@ -228,13 +240,15 @@ def plot_prediction(
             bin_size_ns, pe_truth[batch_index, :], predict_pe[batch_index, :], fit_type=fit_type
         )
 
-    n_bin = pe_truth.shape[1]
+    
+    n_bin = predict_pe.shape[1]
     t_pe_ns = np.arange(0, n_bin) * bin_size_ns + t_samples_ns[0]
 
     fig, axes = plt.subplots(3, 1, sharex='all', figsize=(8, 8))
     axes[0].plot(t_samples_ns, waveform[batch_index, :])
     axes[0].set_ylabel('waveform [LSB]')
-    axes[1].plot(t_pe_ns, pe_truth[batch_index, :], label="truth")
+    if pe_truth is not None:
+        axes[1].plot(t_pe_ns, pe_truth[batch_index, :], label="truth")
     axes[1].plot(
         t_pe_ns,
         predict_pe[batch_index, :],
@@ -258,18 +272,19 @@ def plot_prediction(
         )
     axes[1].set_ylabel('# pe')
     axes[1].legend()
-    axes[2].plot(
-        t_pe_ns, np.cumsum(pe_truth[batch_index, :]),
-        label="truth"
-    )
+    if pe_truth is not None:
+        axes[2].plot(
+            t_pe_ns, np.cumsum(pe_truth[batch_index, :]),
+            label="truth"
+        )
+        axes[2].plot(
+            t_pe_ns,
+            np.cumsum(pe_truth[batch_index, :]) - np.cumsum(predict_pe[batch_index, :]),
+            label="truth - prediction"
+        )
     axes[2].plot(
         t_pe_ns, np.cumsum(predict_pe[batch_index, :]),
         label="prediction"
-    )
-    axes[2].plot(
-        t_pe_ns,
-        np.cumsum(pe_truth[batch_index, :]) - np.cumsum(predict_pe[batch_index, :]),
-        label="truth - prediction"
     )
     axes[2].set_xlabel('time [ns]')
     axes[2].set_ylabel('cumulative # pe')
@@ -586,7 +601,7 @@ def plot_resolution_flash(
     plt.close(fig)
 
 
-def demo_nsb(run_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_range=(0,100), sigma_smooth_pe_ns=2):
+def demo_nsb(model_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_range=(0,100), sigma_smooth_pe_ns=2):
     pe_rate_mhz = 10
     batch_size = 1
     baseline = 0.
@@ -602,7 +617,7 @@ def demo_nsb(run_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_ran
                 str(noise_lsb) + 'LSB ' + \
                 str(shift_proba_bin*bin_size_ns) + ' ns delay on p.e.'
         waveform, pe_truth, predict_pe = toy_nsb_prediction(
-            run_name, pe_rate_mhz=pe_rate_mhz,
+            model_name, pe_rate_mhz=pe_rate_mhz,
             sampling_rate_mhz=sampling_rate_mhz, batch_size=batch_size,
             noise_lsb=noise_lsb, bin_size_ns=bin_size_ns,
             n_sample=n_sample, sigma_smooth_pe_ns=sigma_smooth_pe_ns,
@@ -614,7 +629,7 @@ def demo_nsb(run_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_ran
         bin_range=(sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
         pe_truth = pe_truth[:, bin_range[0]:bin_range[1]]
         predict_pe = predict_pe[:, bin_range[0]:bin_range[1]]
-        directory_plot = 'plots/' + run_name
+        directory_plot = 'plots/' + model_name
         try:
             os.makedirs(directory_plot)
         except FileExistsError:
@@ -638,53 +653,68 @@ def demo_nsb(run_name, n_sample=90, shift_proba_bin=0, batch_index=0, sample_ran
         # )
 
 
-def demo_data(run_name, datafile, shift_proba_bin=0, batch_index=0, sample_range=(0,100)):
-    wf0, wf1, _, _ = read_experimental(datafile, start=0, stop=1000)
+def demo_data(model_name, datafile, shift_proba_bin=0, batch_index=0, sample_range=(0,100)):
+    """
+    Read a ROOT datafile, predict the probability of photo-electrons of a given waveform (the first one by default) and plot the result.
+    :param model_name: name of hte CNN model to use
+    :param datafile: ROOT datafile to read the data from
+    :param shift_proba_bin: how many bin the prediction should be shifted
+    (should be the same value as during the training).
+    :param batch_index: which waveform to plot. (default: 0)
+    :param sample_range: a list of 2 elements containing the minimum and
+    maximum sample to plot.
+    """
+    wf0, _, _, _ = read_experimental(datafile, start=0, stop=1000)
+    wf0_baselines = get_baseline(wf0)
+    wf0_baseline = np.nanmean(wf0_baselines)
+
+    print("baseline found for wf0:", wf0_baseline, "+-",
+          np.nanstd(wf0_baselines))
+    wf0 = wf0.astype(np.float64) - wf0_baseline
     sampling_rate_mhz = 250
     bin_size_ns = 0.5
     t_samples_ns = np.arange(sample_range[0], sample_range[1]) * 1000 / sampling_rate_mhz
     title = datafile
     import tensorflow as tf
     model = tf.keras.models.load_model(
-        './Model/' + run_name + '.h5',
+        './Model/' + model_name + '.h5',
         custom_objects={
             'loss_all': loss_all, 'loss_cumulative': loss_cumulative,
             'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
         }
     )
-    proba0 = model_predict(model, wf0, skip_bins=0)
+    proba0 = model_predict(model, wf0, skip_bins=0, shift_proba_bin=-shift_proba_bin)
 
     waveform = wf0[:, sample_range[0]:sample_range[1]]
     n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
     bin_range=(sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
     predict_pe = proba0[:, bin_range[0]:bin_range[1]]
-    directory_plot = 'plots/' + run_name
+    directory_plot = 'plots/' + model_name
     try:
         os.makedirs(directory_plot)
     except FileExistsError:
         pass
     plot_prediction(
         bin_size_ns, None, predict_pe, t_samples_ns, waveform,
-        filename=directory_plot + '/predict_noise' +
-                 str(noise_lsb) + '_range' + str(sample_range[0]) +
+        filename=directory_plot + '/predict_data_range' + str(sample_range[0]) +
                  '-' +  str(sample_range[1]) + '.png',
         title=title, fit_type=None, batch_index=batch_index,
     )
 
 
 def demo_flasher(
-        run_name, bin_size_ns=0.5, n_pe_flash=10, sampling_rate_mhz=250,
+        model_name, bin_size_ns=0.5, n_pe_flash=10, sampling_rate_mhz=250,
         n_sample=90, noise_lsb=1, batch_size=400, sample_range=(0, 80),
         bin_flash=80, shift_proba_bin=0
 ):
     model = tf.keras.models.load_model(
-        './Model/' + run_name + '.h5',
+        './Model/' + model_name + '.h5',
         custom_objects={
             'loss_all': loss_all, 'loss_cumulative': loss_cumulative,
             'loss_chi2': loss_chi2, 'loss_continuity': loss_continuity
         }
     )
-    print('model ' + run_name + ' is loaded')
+    print('model ' + model_name + ' is loaded')
     n_bin_per_sample = int(1000 / sampling_rate_mhz / bin_size_ns)
     bin_range = (sample_range[0]*n_bin_per_sample, sample_range[1]*n_bin_per_sample)
     gen = generator_flash(
@@ -717,17 +747,17 @@ if __name__ == '__main__':
 
     #model = 'deconv_filters-16x20-8x10-4x10-2x10-1x1-1x1-1x1_lr0.0003_rel_gain_std0.1_pos_rate0-200_smooth2.0_noise0-2_baseline0_run0rr'
     model = 'C16x16_U2_C32x16_U2_C64x8_U2_C128x8_C64x4_C32x4_C16x2_C4x2_C1x1_C1x1_ns0.1_shift64_all1-50-10lr0.0002smooth1_amsgrad_run0'
-    n_pe_flashes = np.unique(np.round(np.logspace(0, 3, 15)).astype(int))
-    for noise_lsb in range(3):
-        plot_resolution_flash(
-            model, filename='noise' + str(noise_lsb) + '.png',
-            n_pe_flashes=n_pe_flashes,
-            noise_lsb=noise_lsb, nsb_rates_mhz=(4, 50, 250, 500),
-            batch_size=1000, charge_resolution_windows_ns=(20, 28, 36),
-            time_resolution_windows_ns=(8, 16, 32), shift_proba_bin=64
-        )
-
-
+    # n_pe_flashes = np.unique(np.round(np.logspace(0, 3, 15)).astype(int))
+    # for noise_lsb in range(3):
+    #     plot_resolution_flash(
+    #         model, filename='noise' + str(noise_lsb) + '.png',
+    #         n_pe_flashes=n_pe_flashes,
+    #         noise_lsb=noise_lsb, nsb_rates_mhz=(4, 50, 250, 500),
+    #         batch_size=1000, charge_resolution_windows_ns=(20, 28, 36),
+    #         time_resolution_windows_ns=(8, 16, 32), shift_proba_bin=64
+    #     )
+    datafile = '/home/yves/prog/pe-extractor/experimental_waveforms/SST1M_01_20200109_0207.root'
+    demo_data(model, datafile, shift_proba_bin=64, batch_index=0, sample_range=(0,100))
     #demo_nsb(model, n_sample=4320, shift_proba_bin=64, batch_index=0, sample_range=(0, 4320), sigma_smooth_pe_ns=1)
     #demo_flasher(model, n_sample=4320, n_pe_flash=10, noise_lsb=1, batch_size=400, sample_range=(0, 40), shift_proba_bin=64)
 
