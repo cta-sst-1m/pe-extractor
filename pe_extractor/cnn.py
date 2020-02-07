@@ -449,12 +449,12 @@ def g2_andrii_toy(
         model, datafile_pix1, datafile_pix2, batch_size=100, n_sample=2500,
         margin_lsb=8, samples_around=5, shifts=range(-500, 501),
         xlim=None, parallel_iterations=10,
-        plot="show"
+        plot="show", n_bin_per_sample=8
 ):
     #get baselines
     gen_baseline_pix1 = generator_andrii_toy(
         datafile_pix1, batch_size=1000, n_sample=n_sample,
-        n_bin_per_sample=8
+        n_bin_per_sample=n_bin_per_sample
     )
     waveforms_pix1, _ = next(gen_baseline_pix1)
     baseline_pix1 = get_baseline(
@@ -464,7 +464,7 @@ def g2_andrii_toy(
     del waveforms_pix1
     gen_baseline_pix2 = generator_andrii_toy(
         datafile_pix2, batch_size=1000, n_sample=n_sample,
-        n_bin_per_sample=8
+        n_bin_per_sample=n_bin_per_sample
     )
     waveforms_pix2, _ = next(gen_baseline_pix2)
     baseline_pix2 = get_baseline(
@@ -501,7 +501,7 @@ def g2_andrii_toy(
     # create correlator
     pe_correlation = Correlation(
         shifts=shifts, n_batch=batch_size,
-        n_sample=n_sample * 8, sample_type=tf.float32, scope="pe",
+        n_sample=n_sample * n_bin_per_sample, sample_type=tf.float32, scope="pe",
         parallel_iterations=parallel_iterations
     )
 
@@ -600,18 +600,6 @@ def generator_rootdatafile(
         ))[:, :n_sample]
         current_event += batch_size
         yield waveform - baseline
-
-
-def get_baseline(waveforms, margin_lsb=8, samples_around=4):
-    min_wf = np.min(waveforms)
-    samples_ignored = waveforms > min_wf + margin_lsb
-    for k in range(-samples_around, samples_around+1):
-        samples_ignored = np.logical_or(
-            samples_ignored,
-            np.roll(samples_ignored, k, axis=1)
-        )
-    baseline = np.mean(waveforms[~samples_ignored])
-    return baseline
 
 
 def generator_rootdatafile_baselinesub(
@@ -773,13 +761,13 @@ def g2_data(
         model, root_datafile, batch_size=100, n_sample=4320,
         margin_lsb=8, samples_around=5, shifts=range(-500, 501),
         xlim=None, parallel_iterations=10,
-        plot="show"
+        plot="show", g2_datafile=None, n_bin_per_sample=8
 ):
     from matplotlib import pyplot as plt
 
     #get baselines
     gen_baseline_pix1 = generator_rootdatafile(
-        root_datafile, batch_size=1000, n_sample=n_sample,
+        root_datafile, batch_size=10000, n_sample=n_sample,
         tree_name="waveforms", branch_name="wf1"
     )
     waveforms_pix1 = next(gen_baseline_pix1)
@@ -815,7 +803,7 @@ def g2_data(
         root_datafile, batch_size=batch_size, n_sample=n_sample,
         tree_name="waveforms", branch_name="wf2", baseline=baseline_pix2
     )
-    sum_wf1, sum_wf2, _, sum_wf12, _, count_wf = wf_correlation(
+    sum_wf1, sum_wf2, sum_wf11, sum_wf12, sum_wf22, count_wf = wf_correlation(
         gen_wf_pix1, gen_wf_pix2
     )
     del wf_correlation
@@ -823,60 +811,75 @@ def g2_data(
     # create correlator
     pe_correlation = Correlation(
         shifts=shifts, n_batch=batch_size,
-        n_sample=n_sample * 8, sample_type=tf.float32, scope="pe",
+        n_sample=n_sample * n_bin_per_sample, sample_type=tf.float32, scope="pe",
         parallel_iterations=parallel_iterations
     )
 
-    # create extractor
-    extractor = Extractor(n_sample)
-    extractor.load(model)
+    sum_pe1, sum_pe2, sum_pe11, sum_pe12, sum_pe22, count_pe = None, None, None, None, None, None
+    if model is not None:
+        # create extractor
+        extractor = Extractor(n_sample)
+        extractor.load(model)
 
-    # compute g2 for extracted pe
-    print("compute g2 on extracted pe")
-    gen_pe_pred_pix1 = extractor.predict_wf_generator(
-        generator_rootdatafile(
-            root_datafile, batch_size=batch_size, n_sample=n_sample,
-            tree_name="waveforms", branch_name="wf1", baseline=baseline_pix1
+        # compute g2 for extracted pe
+        print("compute g2 on extracted pe")
+        gen_pe_pred_pix1 = extractor.predict_wf_generator(
+            generator_rootdatafile(
+                root_datafile, batch_size=batch_size, n_sample=n_sample,
+                tree_name="waveforms", branch_name="wf1", baseline=baseline_pix1
+            )
         )
-    )
-    gen_pe_pred_pix2 = extractor.predict_wf_generator(
-        generator_rootdatafile(
-            root_datafile, batch_size=batch_size, n_sample=n_sample,
-            tree_name="waveforms", branch_name="wf2", baseline=baseline_pix2
+        gen_pe_pred_pix2 = extractor.predict_wf_generator(
+            generator_rootdatafile(
+                root_datafile, batch_size=batch_size, n_sample=n_sample,
+                tree_name="waveforms", branch_name="wf2", baseline=baseline_pix2
+            )
         )
-    )
-    sum_pe1, sum_pe2, _, sum_pe12, _, count_pe = pe_correlation(
-        gen_pe_pred_pix1, gen_pe_pred_pix2
-    )
-    del extractor
-    del pe_correlation
+        sum_pe1, sum_pe2, sum_pe11, sum_pe12, sum_pe22, count_pe = pe_correlation(
+            gen_pe_pred_pix1, gen_pe_pred_pix2
+        )
+        del extractor
+        del pe_correlation
+
+    if g2_datafile is not None:
+        np.savez(
+            g2_datafile, shift_in_sample=shifts,
+            n_sample_wf=n_sample, sum1_wf=sum_wf1, sum2_wf=sum_wf2,
+            sum12_wf=sum_wf12, sum11_wf=sum_wf11, sum22_wf=sum_wf22,
+            shift_in_bins=shifts,
+            n_sample_pb=n_sample *8, sum1_pb=sum_pe1, sum2_pb=sum_pe2,
+            sum12_pb=sum_pe12, sum11_pb=sum_pe11, sum22_pb=sum_pe22,
+            baseline_pix0=baseline_pix1, baseline_pix1=baseline_pix2,
+        )
 
     # plot
-    print("plotting")
-    n_sample_tot = count_wf[np.array(shifts) == 0][0]
-    n_wf_tot = int(n_sample_tot / n_sample)
-    time_tot_us = n_sample_tot * 4e-3
-    title = "g2 with {} waveforms ({:.3f} ms)".format(n_wf_tot, time_tot_us*1e-3)
-    fig = plt.figure(figsize=(4, 3))
-    g2_wf = count_wf * sum_wf12 / (sum_wf1*sum_wf2)
-    g2_pe = count_pe * sum_pe12 / (sum_pe1*sum_pe2)
-    shift_wf_ns = 4. * np.array(shifts)
-    shift_pe_ns = .5 * np.array(shifts)
-    plt.plot(shift_wf_ns, g2_wf, label='g2 from waveforms')
-    plt.plot(shift_pe_ns, g2_pe, label='g2 from CNN')
-    plt.xlabel('delay [ns]')
-    plt.ylabel(r'$g^2(\tau)$')
-    if xlim is not None:
-        plt.xlim(xlim)
-    plt.legend()
-    plt.grid()
-    plt.title(title)
-    plt.tight_layout()
-    if plot == "show":
-        plt.show()
-    else:
-        fig.savefig(plot)
-        print(plot, "image created")
+    if plot is not None:
+        print("plotting")
+        n_sample_tot = count_wf[np.array(shifts) == 0][0]
+        n_wf_tot = int(n_sample_tot / n_sample)
+        time_tot_us = n_sample_tot * 4e-3
+        title = "g2 with {} waveforms ({:.3f} ms)".format(n_wf_tot, time_tot_us*1e-3)
+        fig = plt.figure(figsize=(8, 6))
+        g2_wf = count_wf * sum_wf12 / (sum_wf1*sum_wf2)
+        g2_pe = count_pe * sum_pe12 / (sum_pe1*sum_pe2)
+        shift_wf_ns = 4. * np.array(shifts)
+        shift_pe_ns = .5 * np.array(shifts)
+        plt.plot(shift_wf_ns, g2_wf, label='g2 from waveforms')
+        if model is not None:
+            plt.plot(shift_pe_ns, g2_pe, label='g2 from CNN')
+        plt.xlabel('delay [ns]')
+        plt.ylabel(r'$g^2(\tau)$')
+        if xlim is not None:
+            plt.xlim(xlim)
+        plt.legend()
+        plt.grid()
+        plt.title(title)
+        plt.tight_layout()
+        if plot == "show":
+            plt.show()
+        else:
+            fig.savefig(plot)
+            print(plot, "image created")
 
 
 def charge_resolution(

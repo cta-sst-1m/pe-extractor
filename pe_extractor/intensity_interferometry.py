@@ -325,7 +325,7 @@ def plot_g2_exp(rootfile_data, rootfile_hvoff, run_name=None, g2_plot=None,
 
 
 def plot_g2_toy(
-        run_name=None, shift_in_bins=None, filename=None, batch_size=1, 
+        run_name=None, shift_in_bins=None, filename=None, batch_size=1,
         n_sample=2500, bin_size_ns=0.5, sampling_rate_mhz=250., coherant_rate_mhz=100,
         uncoherant_rate_mhz=0, coherant_noise_lsb=0., uncoherant_noise_lsb=0,
         sigma_ns=2.
@@ -337,7 +337,7 @@ def plot_g2_toy(
     sample_length_ns = 1000. / sampling_rate_mhz
     n_bin_per_sample = sample_length_ns / bin_size_ns
     title_str = '{} waveforms, {} samples @ {} MHz ({:.2g} s)'.format(
-        batch_size, n_sample, sampling_rate_mhz, 
+        batch_size, n_sample, sampling_rate_mhz,
         batch_size * n_sample * 1e-9 * sample_length_ns
     )
     title_str += '\n{} MHz of coherent p.e., {} MHz of uncoherent p.e.'.format(
@@ -511,7 +511,7 @@ def test_correlated_generator(n_pixel=2):
     sampling_rate_mhz=250.
     generator_pixels = generator_coherent_pixels(
         n_event=1, batch_size=batch_size, n_sample=900, n_sample_init=20, coherant_rate_mhz=10,
-        uncoherant_rate_mhz=1, coherant_noise_lsb=0.1, uncoherant_noise_lsb=0.9, n_pixel=2, 
+        uncoherant_rate_mhz=1, coherant_noise_lsb=0.1, uncoherant_noise_lsb=0.9, n_pixel=2,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz, amplitude_gain=5.0
     )
     fig, axes = plt.subplots(n_pixel, 2, figsize=(8, 6))
@@ -658,6 +658,11 @@ if __name__ == '__main__':
     files_pp = 'experimental_waveforms/SST1M_01_20190917_0295_0295_raw_waveforms.root'
     files_sp = 'experimental_waveforms/SST1M_01_20190917_0194_0194_raw_waveforms.root'
 
+    # January 09 data
+    files_lampoff = 'experimental_waveforms/SST1M_01_20190917_0007_0007_raw_waveforms.root'
+    files_pp = 'experimental_waveforms/SST1M_01_20190917_0295_0295_raw_waveforms.root'
+    files_sp = 'experimental_waveforms/SST1M_01_20190917_0194_0194_raw_waveforms.root'
+
     #log_shift = np.unique(np.logspace(3, 7, 50, dtype=int))
     #shift_in_sample = np.sort(np.hstack([-log_shift, 0, log_shift]))
     #shift_in_sample = np.linspace(-5e6, 5e6, 200, dtype=int)
@@ -668,40 +673,47 @@ if __name__ == '__main__':
     # model = 'cnn-example'
     model = 'C16x16_U2_C32x16_U2_C64x8_U2_C128x8_C64x4_C32x4_C16x2_C4x2_C1x1_C1x1_ns0.1_shift64_all1-50-10lr0.0002smooth1_amsgrad_run0'
 
-    if model is None:
-        g2_plot = 'plots/g2_off_' + str(n_events) + '.png'
-    else:
-        g2_plot = 'plots/' + model + '/g2_off_' + str(n_events) + '.png'
-    plot_g2_exp(
-        files_lampoff, files_lampoff, run_name=model,
-        g2_plot=g2_plot, shift_in_sample=shift_in_sample,
-        start=0, stop=n_events, step=None, skip_bins=64,
-        g2_file=g2_plot.replace('.png', '.npz')
-    )
+    # if model is None:
+    #     g2_plot = 'plots/g2_off_' + str(n_events) + '.png'
+    # else:
+    #     g2_plot = 'plots/' + model + '/g2_off_' + str(n_events) + '.png'
+    # plot_g2_exp(
+    #     files_lampoff, files_lampoff, run_name=model,
+    #     g2_plot=g2_plot, shift_in_sample=shift_in_sample,
+    #     start=0, stop=n_events, step=None, skip_bins=64,
+    #     g2_file=g2_plot.replace('.png', '.npz')
+    # )
+    #
+    # if model is None:
+    #     g2_plot='plots/g2_pp_' + str(n_events) + '.png'
+    # else:
+    #     g2_plot='plots/' + model + '/g2_pp_' + str(n_events) + '.png'
+    # plot_g2_exp(
+    #     files_pp, files_lampoff, run_name=model,
+    #     g2_plot=g2_plot, shift_in_sample=shift_in_sample,
+    #     start=0, stop=n_events, step=None, skip_bins=64,
+    #     g2_file=g2_plot.replace('.png', '.npz'),
+    # )
+    #
+    # if model is None:
+    #     g2_plot='plots/g2_sp_' + str(n_events) + '.png'
+    # else:
+    #     g2_plot='plots/' + model + '/g2_sp_' + str(n_events) + '.png'
+    # plot_g2_exp(
+    #     files_sp, files_lampoff,
+    #     run_name=model,
+    #     g2_plot=g2_plot,
+    #     shift_in_sample=shift_in_sample,
+    #     start=0, stop=n_events, step=None, skip_bins=64,
+    #     g2_file=g2_plot.replace('.png', '.npz'),
+    # )
 
-    if model is None:
-        g2_plot='plots/g2_pp_' + str(n_events) + '.png'
-    else:
-        g2_plot='plots/' + model + '/g2_pp_' + str(n_events) + '.png'
-    plot_g2_exp(
-        files_pp, files_lampoff, run_name=model,
-        g2_plot=g2_plot, shift_in_sample=shift_in_sample,
-        start=0, stop=n_events, step=None, skip_bins=64,
-        g2_file=g2_plot.replace('.png', '.npz'),
-    )
+    from pe_extractor.cnn import g2_data
 
-    if model is None:
-        g2_plot='plots/g2_sp_' + str(n_events) + '.png'
-    else:
-        g2_plot='plots/' + model + '/g2_sp_' + str(n_events) + '.png'
-    plot_g2_exp(
-        files_sp, files_lampoff,
-        run_name=model,
-        g2_plot=g2_plot,
-        shift_in_sample=shift_in_sample,
-        start=0, stop=n_events, step=None, skip_bins=64,
-        g2_file=g2_plot.replace('.png', '.npz'),
-    )
-
+    g2_data(model, 'experimental_waveforms/SST1M_01_20200109_0207.root',
+            batch_size=30, n_sample=4320, margin_lsb=5, samples_around=4,
+            shifts=range(-100, 100), xlim=(-1000, 1000),
+            parallel_iterations=48, plot='test.png',
+            g2_datafile='test.npz', n_bin_per_sample=8)
     #plots_g2('cnn-example')
     #test_correlated_generator()

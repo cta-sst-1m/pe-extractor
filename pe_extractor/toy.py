@@ -473,7 +473,9 @@ def generator_andrii_toy(
 
 
 def get_baseline(waveforms, margin_lsb=8, samples_around=4):
-    min_wf = np.min(waveforms)
+    min_wf = np.min(waveforms, axis=1)
+    n_sample = waveforms.shape[1]
+    threshold = min_wf.reshape([-1, 1]) * np.ones([1, n_sample]) + margin_lsb
     samples_ignored = waveforms > min_wf + margin_lsb
     for k in range(-samples_around, samples_around+1):
         samples_ignored = np.logical_or(
