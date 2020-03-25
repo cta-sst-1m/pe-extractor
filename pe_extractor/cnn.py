@@ -27,13 +27,19 @@ class Correlation:
                     [n_batch, tf.minimum(n_sample+shift_sample, n_sample)]
                 )
                 size_wf1 = end_wf1 - begin_wf1
-                wf1_shifted = tf.slice(self.wf1, begin_wf1, size_wf1)
+                wf1_shifted = tf.cast(
+                    tf.slice(self.wf1, begin_wf1, size_wf1),
+                    tf.float32
+                )
                 begin_wf2 = tf.stack([0, tf.maximum(-shift_sample, 0)])
                 end_wf2 = tf.stack(
                     [n_batch, tf.minimum(n_sample-shift_sample, n_sample)]
                 )
                 size_wf2 = end_wf2 - begin_wf2
-                wf2_shifted = tf.slice(self.wf2, begin_wf2, size_wf2)
+                wf2_shifted = tf.cast(
+                    tf.slice(self.wf2, begin_wf2, size_wf2),
+                    tf.float32
+                )
                 sum_1 = tf.reduce_sum(wf1_shifted)
                 sum_2 = tf.reduce_sum(wf2_shifted)
                 sum_11 = tf.reduce_sum(wf1_shifted*wf1_shifted)
@@ -47,7 +53,6 @@ class Correlation:
                 self.shifts,
                 parallel_iterations=parallel_iterations,
                 back_prop=False,
-                #infer_shape=False,
                 dtype=(
                     tf.float32, tf.float32, tf.float32, tf.float32,
                     tf.float32, tf.int64
@@ -68,23 +73,44 @@ class Correlation:
     def __del__(self):
         self.sess.close()
 
-    def __call__(self, input_wf1, input_wf2):
-        wf1_gen = None
-        wf2_gen = None
-        if isinstance(input_wf1, types.GeneratorType):
-            wf1_gen = input_wf1
-        if isinstance(input_wf1, np.ndarray):
-            wf1_gen = [input_wf1, ]
-        if isinstance(input_wf2, types.GeneratorType):
-            wf2_gen = input_wf2
-        if isinstance(input_wf2, np.ndarray):
-            wf2_gen = [input_wf2, ]
-        if wf1_gen is None:
-            ValueError("both arguments must be arrays or generators")
-        if wf2_gen is None:
-            ValueError("both arguments must be arrays or generators")
-        sum_1, sum_2, sum_11, sum_12, sum_22, count = (None,) *6
-        for wf1, wf2 in tqdm(zip(wf1_gen, wf2_gen)):
+    def __call__(self, wf1, wf2):
+        """
+        Function to calculate the correlatinos with batch of waveform as input as input
+        :param wf1: batch of waveforms for the 1st pixel
+        :param wf2: batch of waveforms for the 2nd pixel
+        :return: sum_1, sum_2, sum_11, sum_12, sum_22, count: correlation for
+        the shift in time-bins given at the constructor
+        sum_1: float32 giving the sum of the 1st pixel samples
+        sum_2: float32 giving the sum of the 2nd pixel samples
+        sum_11: float32 giving the sum of the 1st pixel samples squared
+        sum_12: float32 giving the sum of the product of the 1st and 2nd pixel samples
+        sum_22: float32 giving the sum of the 2nd pixel samples squared
+        count: int64 giving the number of samples
+        """
+        return self.sess.run(
+            [
+                self.sum_1, self.sum_2, self.sum_11,
+                self.sum_12, self.sum_22, self.count
+            ],
+            feed_dict={self.wf1: wf1, self.wf2: wf2}
+        )
+
+    def generator(self, input_generator1, input_generator2):
+        """
+        Function to calculate the correlatinos with generator as input
+        :param input_generator1: generator of batch of waveforms for the 1st pixel
+        :param input_generator2: generator of batch of waveforms for the 2nd pixel
+        :return: sum_1, sum_2, sum_11, sum_12, sum_22, count: correlation for
+        the shift in time-bins given at the constructor
+        sum_1: float32 giving the sum of the 1st pixel samples
+        sum_2: float32 giving the sum of the 2nd pixel samples
+        sum_11: float32 giving the sum of the 1st pixel samples squared
+        sum_12: float32 giving the sum of the product of the 1st and 2nd pixel samples
+        sum_22: float32 giving the sum of the 2nd pixel samples squared
+        count: int64 giving the number of samples
+        """
+        sum_1, sum_2, sum_11, sum_12, sum_22, count = (None,) * 6
+        for wf1, wf2 in tqdm(zip(input_generator1, input_generator2)):
             output = self.sess.run(
                 [
                     self.sum_1, self.sum_2, self.sum_11,
