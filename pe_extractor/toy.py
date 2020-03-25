@@ -213,7 +213,9 @@ def gauss_kernel(bin_size_ns, sigma_ns):
 def generator_flash(
         n_event=None, batch_size=1, n_sample=90, bin_flash=80,
         n_pe_flash=(1, 100), bin_size_ns=0.5, sampling_rate_mhz=250,
-        amplitude_gain=5., noise_lsb=1.05, shift_proba_bin=0
+        amplitude_gain=5., noise_lsb=1.05, shift_proba_bin=0,
+        template_path='pulse_templates/SST-1M_01.txt'
+
 ):
     """
     Generator returning for each iteration a batch of waveforms and a batch of
@@ -233,13 +235,15 @@ def generator_flash(
     :param noise_lsb: amplitude of random noise to add to the waveforms.
     Can be a tuple, then for each event of all batches the rate is taken in
     the range given by the tuple.
+    :param template_path: path to a text file where the 1st column is the time
+    and the 2nd column is the amplitude of the pulse template.
     :return: a generator of tuple of 2 arrays at each iteration. First array is
     a batch of waveforms (amplitude of the sampled signal) and a batch of pes
     (number of pes per bin). For both, first dimension is the batch iteration,
     second is along time (bin or sample).
     """
     template_amplitude_bin = prepare_pulse_template(
-        template_path='pulse_templates/SST-1M_01.txt',
+        template_path=template_path,
         amplitude_gain=amplitude_gain,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz
     )
@@ -268,7 +272,8 @@ def generator_nsb(
         n_event=None, batch_size=1, n_sample=90, n_sample_init=20,
         pe_rate_mhz=100, bin_size_ns=0.5, sampling_rate_mhz=250,
         amplitude_gain=5., noise_lsb=1.05, sigma_smooth_pe_ns=0.,
-        baseline=0, relative_gain_std=0.1, shift_proba_bin=0, dtype=np.float64
+        baseline=0, relative_gain_std=0.1, shift_proba_bin=0, dtype=np.float64,
+        template_path='pulse_templates/SST-1M_01.txt'
 ):
     """
     Generator returning for each iteration a batch of waveforms and a batch of
@@ -299,13 +304,15 @@ def generator_nsb(
     Can be a tuple, then for each event of all batches the baseline is taken
     in the range given by the tuple.
     :param rel_gain_std: gain standard  deviation divided by the gain.
+    :param template_path: path to a text file where the 1st column is the time
+    and the 2nd column is the amplitude of the pulse template.
     :return: a generator of tuple of 2 arrays at each iteration. First array is
     a batch of waveforms (amplitude of the sampled signal) and a batch of p.e.
     (number of pes per bin). For both, first dimension is the batch iteration,
     second is along time (bin or sample).
     """
     template_amplitude_bin = prepare_pulse_template(
-        template_path='pulse_templates/SST-1M_01.txt', amplitude_gain=amplitude_gain,
+        template_path=template_path, amplitude_gain=amplitude_gain,
         bin_size_ns=bin_size_ns, sampling_rate_mhz=sampling_rate_mhz
     )
     sample_size_ns = 1000 / sampling_rate_mhz
@@ -473,9 +480,7 @@ def generator_andrii_toy(
 
 
 def get_baseline(waveforms, margin_lsb=8, samples_around=4):
-    min_wf = np.min(waveforms, axis=1)
-    n_sample = waveforms.shape[1]
-    threshold = min_wf.reshape([-1, 1]) * np.ones([1, n_sample]) + margin_lsb
+    min_wf = np.min(waveforms, axis=1, keepdims=True)
     samples_ignored = waveforms > min_wf + margin_lsb
     for k in range(-samples_around, samples_around+1):
         samples_ignored = np.logical_or(
