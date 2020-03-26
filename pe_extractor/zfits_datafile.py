@@ -297,6 +297,7 @@ def get_fft_avg(zfits_run, batch_size=1000):
         else:
             mean_fft += np.sum(np.abs(fft), axis=0)
         n_waveform += batch_size
+    pbar.close()
     mean_fft /= n_waveform
     freq_MHz = np.fft.rfftfreq(n_sample, d=4e-9)*1e-6
     sum_fft_per_batch = np.concatenate(sum_fft_per_batch, axis=0)
@@ -399,7 +400,7 @@ def g2_from_files(zfits_run, shift_bin, title=None, batch_size=1000):
         sum_12_all += sum_12
         sum_22_all += sum_22
         count_all += count
-
+    pbar.close()
     g2_12 = count_all * sum_12_all / (sum_1_all * sum_2_all)
     time_shift_ns = shift_bin * 4
     plt.plot(time_shift_ns, g2_12, 'b-+', label='no filter')
@@ -436,6 +437,7 @@ def get_psd(zfits_run, batch_size=1000):
             psd_2 += np.sum(fft[:, :, 1] * np.conj(fft[:, :, 1]), axis=0)
             csd += np.sum(np.conj(fft[:, :, 0])*fft[:, :, 1], axis=0)
         n_waveform += batch_size
+    pbar.close()
     psd_1 /= n_waveform
     psd_2 /= n_waveform
     csd /= n_waveform
@@ -453,7 +455,7 @@ def coherence(zfits_run, batch_size=1000, plot=None):
         plt.semilogy(freq_MHz, np.abs(csd), label='$csd_{12}$')
         plt.xlabel('frequency [MHz]')
         plt.legend()
-        plt.ylim([1e-6, 1e4])
+        plt.ylim([1e-4, 1e4])
         plt.show()
     return freq_MHz, np.abs(coher)
 
@@ -461,30 +463,36 @@ def coherence(zfits_run, batch_size=1000, plot=None):
 if __name__ == '__main__':
     pp_files = [
         "experimental_waveforms/SST1M_01_20200121_0006.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0007.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0008.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0009.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0007.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0008.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0009.fits.fz",
     ]
     pp_run = ZfitsRun(pp_files)
 
-    freq, coher = coherence(pp_run, batch_size=1000)
-    plt.plot(freq, coher)
-    plt.title('coherence PP run')
-    plt.xlabel('frequency [MHz]')
-    plt.ylim(0, 1)
-    plt.show()
+    freq_pp, coher_pp = coherence(pp_run, batch_size=1000, plot=True)
 
     sp_files = [
         "experimental_waveforms/SST1M_01_20200121_0353.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0354.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0355.fits.fz",
-        "experimental_waveforms/SST1M_01_20200121_0356.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0354.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0355.fits.fz",
+        #"experimental_waveforms/SST1M_01_20200121_0356.fits.fz",
     ]
     sp_run = ZfitsRun(sp_files)
 
-    freq, coher = coherence(sp_run, batch_size=1000)
-    plt.plot(freq, coher)
-    plt.title('coherence SP run')
-    plt.xlabel('frequency [MHz]')
-    plt.ylim(0, 1)
+    freq_sp, coher_sp = coherence(sp_run, batch_size=1000, plot=True)
+
+    fig, axes = plt.subplots(2, 1, sharex='col')
+    axes[0].semilogy(freq_pp, coher_pp)
+    axes[0].set_title('coherence PP run')
+    axes[0].set_xlabel('frequency [MHz]')
+    axes[0].set_xlim([freq_pp[0], freq_pp[-1]])
+    axes[0].set_ylim(1e-6, 1)
+    axes[0].grid()
+    axes[1].semilogy(freq_sp, coher_sp)
+    axes[1].set_title('coherence SP run')
+    axes[1].set_xlabel('frequency [MHz]')
+    axes[0].set_xlim([freq_sp[0], freq_sp[-1]])
+    axes[1].set_ylim(1e-6, 1)
+    axes[1].grid()
+    plt.tight_layout()
     plt.show()
