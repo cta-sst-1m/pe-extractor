@@ -281,10 +281,11 @@ def get_fft_avg(zfits_run, batch_size=1000):
     generator_sii = zfits_run.get_generator_waveform(batch_size=batch_size)
     sum_fft_per_batch = []
     n_waveform = 0
+    n_sample = 0
     mean_fft = None
     pbar = tqdm(desc='wf')
     for batch_wf in generator_sii:
-        batch_size = batch_wf.shape[0]
+        batch_size, n_sample, _ = batch_wf.shape
         pbar.update(batch_size)
         baseline = np.mean(np.mean(batch_wf, axis=1), axis=0)
         baseline_wf = np.tile(baseline.reshape([1,1, -1]), [batch_size, 4320, 1])
@@ -297,7 +298,6 @@ def get_fft_avg(zfits_run, batch_size=1000):
             mean_fft += np.sum(np.abs(fft), axis=0)
         n_waveform += batch_size
     mean_fft /= n_waveform
-    n_sample = mean_fft.shape[0]
     freq_MHz = np.fft.rfftfreq(n_sample, d=4e-9)*1e-6
     sum_fft_per_batch = np.concatenate(sum_fft_per_batch, axis=0)
     phases_per_batch = np.angle(sum_fft_per_batch)
@@ -305,7 +305,7 @@ def get_fft_avg(zfits_run, batch_size=1000):
     return freq_MHz, mean_fft, phases_per_batch
 
 
-def plot_fft_avg(zfits_run, batch_size=1000, title=None):
+def plot_fft_avg(zfits_run, batch_size=1000, title=None, plot=None):
     freq_MHz, mean_fft, phases_per_batch = get_fft_avg(
         zfits_run, batch_size=batch_size
     )
@@ -313,25 +313,30 @@ def plot_fft_avg(zfits_run, batch_size=1000, title=None):
     std_phase_diff = np.std(phases_diff, axis=0)
     freq_coherent_MHz = freq_MHz[std_phase_diff < 2.3]
 
-    fig, axes = plt.subplots(2, 1, sharex=True)
-    axes[0].semilogy(
-        freq_MHz[freq_MHz >= 0], mean_fft[freq_MHz >= 0, 0],
-        '-', label='pixel 0'
-    )
-    axes[0].semilogy(
-        freq_MHz[freq_MHz >= 0], mean_fft[freq_MHz >= 0, 0],
-        '--', label='pixel 1')
-    axes[0].set_ylabel('amplitude of fft')
-    axes[0].set_xlim([0, np.max(freq_MHz)])
-    axes[0].grid()
-    axes[0].legend()
-    if title is not None:
-        axes[0].set_title(title)
-    axes[1].plot(freq_MHz[freq_MHz > 0], std_phase_diff[freq_MHz > 0], '-')
-    axes[1].set_ylabel('std of phase difference')
-    axes[1].set_xlabel('frequency (MHz)')
-    axes[1].grid()
-    fig.show()
+    if plot is not None:
+        fig, axes = plt.subplots(2, 1, sharex=True)
+        axes[0].semilogy(
+            freq_MHz[freq_MHz >= 0], mean_fft[freq_MHz >= 0, 0],
+            '-', label='pixel 0'
+        )
+        axes[0].semilogy(
+            freq_MHz[freq_MHz >= 0], mean_fft[freq_MHz >= 0, 0],
+            '--', label='pixel 1')
+        axes[0].set_ylabel('amplitude of fft')
+        axes[0].set_xlim([0, np.max(freq_MHz)])
+        axes[0].grid()
+        axes[0].legend()
+        if title is not None:
+            axes[0].set_title(title)
+        axes[1].plot(freq_MHz[freq_MHz > 0], std_phase_diff[freq_MHz > 0], '-')
+        axes[1].set_ylabel('std of phase difference')
+        axes[1].set_xlabel('frequency (MHz)')
+        axes[1].grid()
+        if plot.lower() == "show":
+            fig.show()
+        else:
+            plt.savefig(plot)
+        plt.close(fig)
     return freq_coherent_MHz
 
 
@@ -407,6 +412,52 @@ def g2_from_files(zfits_run, shift_bin, title=None, batch_size=1000):
     zfits_run.reset()
 
 
+def get_psd(zfits_run, batch_size=1000):
+    generator_sii = zfits_run.get_generator_waveform(batch_size=batch_size)
+    n_waveform = 0
+    psd_1 = None
+    psd_2 = None
+    csd = None
+    pbar = tqdm(desc='wf')
+    n_sample = 0
+    for batch_wf in generator_sii:
+        batch_size, n_sample, _ = batch_wf.shape
+        pbar.update(batch_size)
+        baseline = np.mean(np.mean(batch_wf, axis=1), axis=0)
+        baseline_wf = np.tile(baseline.reshape([1,1, -1]), [batch_size, 4320, 1])
+        batch_wf -= baseline_wf
+        fft = np.fft.rfft(batch_wf, axis=1, norm='ortho')
+        if psd_1 is None:
+            psd_1 = np.sum(fft[:, :, 0] * np.conj(fft[:, :, 0]), axis=0)
+            psd_2 = np.sum(fft[:, :, 1] * np.conj(fft[:, :, 1]), axis=0)
+            csd = np.sum(np.conj(fft[:, :, 0])*fft[:, :, 1], axis=0)
+        else:
+            psd_1 += np.sum(fft[:, :, 0] * np.conj(fft[:, :, 0]), axis=0)
+            psd_2 += np.sum(fft[:, :, 1] * np.conj(fft[:, :, 1]), axis=0)
+            csd += np.sum(np.conj(fft[:, :, 0])*fft[:, :, 1], axis=0)
+        n_waveform += batch_size
+    psd_1 /= n_waveform
+    psd_2 /= n_waveform
+    csd /= n_waveform
+    freq_MHz = np.fft.rfftfreq(n_sample, d=4e-9)*1e-6
+    zfits_run.reset()
+    return freq_MHz, psd_1, psd_2, csd
+
+
+def coherence(zfits_run, batch_size=1000, plot=None):
+    freq_MHz, psd_1, psd_2, csd = get_psd(zfits_run, batch_size=batch_size)
+    coher = (np.abs(csd) ** 2) / (psd_1 * psd_2)
+    if plot:
+        plt.semilogy(freq_MHz, psd_1, label='$psd_1$')
+        plt.semilogy(freq_MHz, psd_2, label='$psd_2$')
+        plt.semilogy(freq_MHz, np.abs(csd), label='$csd_{12}$')
+        plt.xlabel('frequency [MHz]')
+        plt.legend()
+        plt.ylim([1e-6, 1e4])
+        plt.show()
+    return freq_MHz, np.abs(coher)
+
+
 if __name__ == '__main__':
     pp_files = [
         "experimental_waveforms/SST1M_01_20200121_0006.fits.fz",
@@ -414,6 +465,14 @@ if __name__ == '__main__':
         "experimental_waveforms/SST1M_01_20200121_0008.fits.fz",
         "experimental_waveforms/SST1M_01_20200121_0009.fits.fz",
     ]
+    pp_run = ZfitsRun(pp_files)
+
+    freq, coher = coherence(pp_run, batch_size=1000)
+    plt.plot(freq, coher)
+    plt.title('coherence PP run')
+    plt.xlabel('frequency [MHz]')
+    plt.ylim(0, 1)
+    plt.show()
 
     sp_files = [
         "experimental_waveforms/SST1M_01_20200121_0353.fits.fz",
@@ -421,18 +480,11 @@ if __name__ == '__main__':
         "experimental_waveforms/SST1M_01_20200121_0355.fits.fz",
         "experimental_waveforms/SST1M_01_20200121_0356.fits.fz",
     ]
-
-    shift_bin = np.arange(-50, 51)
-
     sp_run = ZfitsRun(sp_files)
 
-    plot_fft_avg(sp_run, batch_size=1000, title='SP without filter')
-    g2_from_files(sp_run, shift_bin, title='SP without filter')
-    plot_phase_diff_evolution(sp_run, batch_size=1000, title='SP without filter')
-
-    sp_run.set_lowpass_filter(lowpass_cut_MHz=40, order_filter=3)
-
-    plot_fft_avg(sp_run, batch_size=1000, title='SP with 3rd order 40MHz lowpass filter')
-    g2_from_files(sp_run, shift_bin, title='SP with 3rd order 40MHz lowpass filter')
-    plot_phase_diff_evolution(sp_run, batch_size=1000, title='SP with 3rd order 40MHz lowpass filter')
-
+    freq, coher = coherence(sp_run, batch_size=1000)
+    plt.plot(freq, coher)
+    plt.title('coherence SP run')
+    plt.xlabel('frequency [MHz]')
+    plt.ylim(0, 1)
+    plt.show()
