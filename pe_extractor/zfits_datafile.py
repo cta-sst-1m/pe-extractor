@@ -6,11 +6,14 @@ import tensorflow as tf
 from tqdm import tqdm
 from pe_extractor.toy import get_baseline
 from scipy.signal import butter, lfilter, freqz
+import os
 
 
 class ZfitsRun:
-    def __init__(self, zfits_filenames, n_channel=2,
-                 lowpass_cut_MHz=None, order_filter=8, sampling_freq_MHz=250):
+    def __init__(
+            self, zfits_filenames, n_channel=2,
+            lowpass_cut_MHz=None, order_filter=8, sampling_freq_MHz=250,
+    ):
         """
         Create a run from a list of zfits files. Also optionally add a lowpass
         filter.
@@ -23,7 +26,12 @@ class ZfitsRun:
         :param sampling_freq_MHz: sampling frequency, used only if
         lowpass_cut_MHz is not None
         """
-        self.zfits_filenames = zfits_filenames
+        self.zfits_filenames = []
+        for f in zfits_filenames:
+            if os.path.isfile(f):
+                self.zfits_filenames.append(f)
+            else:
+                print('WARNING: file', f, 'skipped as it could not be found')
         self.buffer_datafile = None
         self.n_channel = n_channel
         self.set_lowpass_filter(
@@ -55,7 +63,8 @@ class ZfitsRun:
             self.b_poly = None
 
     def get_generator_waveform(
-            self, batch_size=1, baselines=0., full_batch=True
+            self, batch_size=1, baselines=0., full_batch=True,
+            synchro_between_files=False
     ):
         """
         function returning a generator yielding a batch of baseline-subtracted
@@ -64,6 +73,9 @@ class ZfitsRun:
         :param batch_size: number of waveforms to be returned per per batch
         :param baselines: value of the baseline that will be subtracted for each pixel
         :param full_batch: if True, only full batches are returned.
+        :param synchro_between_files: if True the event form the different channels will
+        be synchronized between files, otherwise the events are synchronized only within
+        a file.
         :return: a generator of batch of waveform (size n_batch x n_sample x n_pix)
         """
         baselines = np.array(baselines).reshape([1, 1, -1])
@@ -71,9 +83,18 @@ class ZfitsRun:
         for f in self.zfits_filenames:
             print("Reading", f)
             if self.buffer_datafile is None:
-                self.buffer_datafile = ZfitsDatafile(f, self.n_channel, n_synchro_max=batch_size)
+                self.buffer_datafile = ZfitsDatafile(
+                    f, self.n_channel, n_synchro_max=batch_size
+                )
             else:
-                self.buffer_datafile.add_datafile(ZfitsDatafile(f, self.n_channel, n_synchro_max=batch_size))
+                if synchro_between_files:
+                    self.buffer_datafile.add_datafile(
+                        ZfitsDatafile(f, self.n_channel, n_synchro_max=batch_size)
+                    )
+                else:
+                    self.buffer_datafile = ZfitsDatafile(
+                        f, self.n_channel, n_synchro_max=batch_size
+                    )
             if incomplete_batch is not None:
                 new_batch = self.buffer_datafile.get_batch_synchronized(
                     batch_size - incomplete_batch.shape[0], remove_events=True
@@ -414,7 +435,7 @@ def g2_from_files(zfits_run, shift_bin, title=None, batch_size=1000):
 
 
 def get_psd(zfits_run, batch_size=1000):
-    generator_sii = zfits_run.get_generator_waveform(batch_size=batch_size)
+    generator_sii = zfits_run.get_generator_waveform(batch_size=batch_size, )
     n_waveform = 0
     psd_1 = None
     psd_2 = None
@@ -463,36 +484,41 @@ def coherence(zfits_run, batch_size=1000, plot=None):
 if __name__ == '__main__':
     pp_files = [
         "experimental_waveforms/SST1M_01_20200121_0006.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0007.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0008.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0009.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0007.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0008.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0009.fits.fz",
     ]
+    #pp_files = [ "/data/SII/2020/02/24/SST1M_01/SST1M_01_20200224_{:04}.fits.fz".format(i) for i in range(29, 39) ] #range(29, 136)
     pp_run = ZfitsRun(pp_files)
 
-    freq_pp, coher_pp = coherence(pp_run, batch_size=1000, plot=True)
+    freq_pp, coher_pp = coherence(pp_run, batch_size=1000)
+    del pp_run
 
     sp_files = [
         "experimental_waveforms/SST1M_01_20200121_0353.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0354.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0355.fits.fz",
-        #"experimental_waveforms/SST1M_01_20200121_0356.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0354.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0355.fits.fz",
+        "experimental_waveforms/SST1M_01_20200121_0356.fits.fz",
     ]
+    #sp_files = [ "/data/SII/2020/02/24/SST1M_01/SST1M_01_20200224_{:04}.fits.fz".format(i) for i in range(528, 538) ] #range(528, 614)
     sp_run = ZfitsRun(sp_files)
 
-    freq_sp, coher_sp = coherence(sp_run, batch_size=1000, plot=True)
+    freq_sp, coher_sp = coherence(sp_run, batch_size=1000)
+    del sp_run
 
     fig, axes = plt.subplots(2, 1, sharex='col')
     axes[0].semilogy(freq_pp, coher_pp)
     axes[0].set_title('coherence PP run')
     axes[0].set_xlabel('frequency [MHz]')
     axes[0].set_xlim([freq_pp[0], freq_pp[-1]])
-    axes[0].set_ylim(1e-6, 1)
+    axes[0].set_ylim([1e-6, 1])
     axes[0].grid()
     axes[1].semilogy(freq_sp, coher_sp)
     axes[1].set_title('coherence SP run')
     axes[1].set_xlabel('frequency [MHz]')
     axes[0].set_xlim([freq_sp[0], freq_sp[-1]])
-    axes[1].set_ylim(1e-6, 1)
+    axes[1].set_ylim([1e-6, 1])
     axes[1].grid()
     plt.tight_layout()
-    plt.show()
+    plt.savefig('coherence_20200121.png')
+    #plt.savefig('coherence_20200224.png')
